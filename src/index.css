@@ -1,0 +1,169 @@
+/* ─── CSS Design Tokens ─────────────────────────────────────────── */
+:root {
+  --font: 'Sora', sans-serif;
+
+  /* Surfaces */
+  --bg-app:        #f0f2f5;
+  --bg-surface:    #ffffff;
+  --bg-toolbar:    #1e2130;
+  --bg-header:     #f7f8fa;
+  --bg-row-hover:  #f3f4f7;
+  --bg-swimlane:   #eef0f5;
+
+  /* Borders */
+  --border:        #e2e5ec;
+  --border-strong: #cdd1da;
+
+  /* Text */
+  --text-primary:  #1a1d2e;
+  --text-secondary:#6b7280;
+  --text-muted:    #9ca3af;
+  --text-inverse:  #ffffff;
+
+  /* Accent (Today marker) */
+  --accent:        #6366f1;
+  --accent-light:  rgba(99, 102, 241, 0.12);
+
+  /* Toolbar */
+  --toolbar-text:  #d1d5db;
+  --toolbar-hover: rgba(255,255,255,0.08);
+
+  /* Layout */
+  --left-panel-w:  280px;
+  --row-h:         40px;
+  --header-h:      60px;  /* two-line date header */
+  --toolbar-h:     52px;
+}
+
+/* ─── Reset ─────────────────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body, #root {
+  height: 100%;
+  font-family: var(--font);
+  font-size: 13px;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+button {
+  font-family: var(--font);
+  cursor: pointer;
+  border: none;
+  background: none;
+}
+
+input {
+  font-family: var(--font);
+  outline: none;
+}
+
+/* ─── Scrollbars ─────────────────────────────────────────────────── */
+::-webkit-scrollbar          { width: 7px; height: 7px; }
+::-webkit-scrollbar-track    { background: transparent; }
+::-webkit-scrollbar-thumb    { background: #c8cbd4; border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: #a8adb8; }
+
+/* ─── Utility ────────────────────────────────────────────────────── */
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ─── Modal Backdrop ─────────────────────────────────────────────── */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 17, 26, 0.45);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  animation: fadeIn 0.15s ease;
+}
+
+.modal-box {
+  background: var(--bg-surface);
+  border-radius: 12px;
+  padding: 28px;
+  width: 400px;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.18);
+  animation: slideUp 0.18s ease;
+}
+
+@keyframes fadeIn  { from { opacity: 0; } to { opacity: 1; } }
+@keyframes slideUp { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+
+/* ─── Form Elements ──────────────────────────────────────────────── */
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+  margin-bottom: 6px;
+}
+
+.form-input {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 7px;
+  font-size: 13px;
+  color: var(--text-primary);
+  transition: border-color 0.15s;
+}
+
+.form-input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-light);
+}
+
+/* ─── Buttons ────────────────────────────────────────────────────── */
+.btn-primary {
+  padding: 9px 20px;
+  background: var(--accent);
+  color: #fff;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  transition: background 0.15s, transform 0.1s;
+}
+.btn-primary:hover { background: #4f52d4; }
+.btn-primary:active { transform: scale(0.98); }
+
+.btn-ghost {
+  padding: 9px 16px;
+  color: var(--text-secondary);
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 500;
+  transition: background 0.15s;
+}
+.btn-ghost:hover { background: var(--bg-row-hover); }
+
+/* ─── Color Swatch Grid ──────────────────────────────────────────── */
+.color-grid {
+  display: grid;
+  grid-template-columns: repeat(8, 28px);
+  gap: 6px;
+}
+
+.color-swatch {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: transform 0.1s, box-shadow 0.1s;
+  border: 2.5px solid transparent;
+}
+.color-swatch:hover   { transform: scale(1.15); }
+.color-swatch.selected { border-color: var(--text-primary); box-shadow: 0 0 0 2px white inset; }
