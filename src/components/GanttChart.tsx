@@ -1,260 +1,185 @@
-import React, { useMemo, useRef, useState, useCallback } from 'react';
+import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useGantt } from '../context/GanttContext';
 import type { CalendarRow, GanttTask, GanttMilestone, Project } from '../types';
 import {
   parseDate, formatDate, addDays, dayDiff,
   buildDailyColumns, buildWeeklyColumns,
   getISOWeekNumber, getDayName, getMonthName,
-  isWeekend, getMondayOfWeek,
+  isWeekend,
 } from '../utils/dateUtils';
 
-// ─── Layout Constants ────────────────────────────────────────────────────────
+// ─── Layout Constants ─────────────────────────────────────────────────────────
 
-const LEFT_W       = 280;   // left panel width in px
-const ROW_H        = 40;    // every row (header + item) height in px
-const HEADER_H     = 60;    // two-line calendar header height in px
-const DAILY_COL_W  = 44;    // px per day in daily view
-const WEEKLY_COL_W = 120;   // px per week in weekly view
-const TASK_BAR_H   = 22;    // height of a rendered task bar
-const MILESTONE_SZ = 14;    // side length of the milestone diamond box
-
-// ─── Helper: pixels per day for the active view ──────────────────────────────
+const LEFT_W           = 280;
+const ROW_H            = 40;
+const MILESTONE_ROW_H  = 56;
+const HEADER_H         = 60;
+const DAILY_COL_W      = 44;
+const WEEKLY_COL_W     = 120;
+const TASK_BAR_H       = 22;
+const MILESTONE_SZ     = 14;
+const MILESTONE_NAME_H = 16;
+const LABEL_W          = 90;
+const HANDLE_W         = 6;
 
 function pxPerDay(viewMode: 'daily' | 'weekly'): number {
   return viewMode === 'daily' ? DAILY_COL_W : WEEKLY_COL_W / 7;
 }
 
-// ─── Sub-component: Task Bar ─────────────────────────────────────────────────
+// ─── Calendar Drag Types ──────────────────────────────────────────────────────
+
+interface CalDragState {
+  kind: 'move-task' | 'resize-left' | 'resize-right' | 'move-milestone';
+  itemId: string;
+  startMouseX: number;
+  originalStartDate: string;
+  originalEndDate: string;
+  originalDate: string;
+  ppd: number;
+  calStartDate: Date;
+}
+
+interface CalDragPreview {
+  itemId: string;
+  startDate: string | null;
+  endDate: string | null;
+  date: string | null;
+}
+
+// ─── Row Drag (reorder) types ─────────────────────────────────────────────────
+
+/** What is being dragged in the left panel */
+interface RowDragState {
+  kind: 'project' | 'task';
+  id: string;
+  projectId?: string; // for tasks
+}
+
+// ─── Sub-component: Task Bar ──────────────────────────────────────────────────
 
 interface TaskBarProps {
   task: GanttTask;
   color: string;
   calStart: Date;
-  ppd: number; // pixels per day
+  ppd: number;
   rowH: number;
+  preview?: { startDate: string | null; endDate: string | null };
+  onDragStart: (e: React.MouseEvent, kind: 'move-task' | 'resize-left' | 'resize-right') => void;
+  onBarClick?: (e: React.MouseEvent) => void;
 }
 
-function TaskBar({ task, color, calStart, ppd, rowH }: TaskBarProps) {
-  if (!task.startDate) return null;
+function TaskBar({ task, color, calStart, ppd, rowH, preview, onDragStart, onBarClick }: TaskBarProps) {
+  const startDate = preview?.startDate ?? task.startDate;
+  const endDate   = preview?.endDate   ?? task.endDate;
 
-  const start = parseDate(task.startDate);
-  const leftPx  = dayDiff(calStart, start) * ppd;
+  if (!startDate) return null;
 
-  if (task.endDate) {
-    // Fully placed — render the full bar
-    const end = parseDate(task.endDate);
-    const widthPx = (dayDiff(start, end) + 1) * ppd;
-    const topPx = (rowH - TASK_BAR_H) / 2;
+  const start  = parseDate(startDate);
+  const leftPx = dayDiff(calStart, start) * ppd;
 
+  if (!endDate) {
     return (
       <div style={{
-        position: 'absolute',
-        left: leftPx,
-        width: Math.max(widthPx, 4),
-        top: topPx,
-        height: TASK_BAR_H,
-        background: color,
-        borderRadius: 5,
-        display: 'flex',
-        alignItems: 'center',
-        paddingLeft: 8,
-        overflow: 'hidden',
-        boxShadow: `0 1px 4px ${color}55`,
-        cursor: 'default',
-        transition: 'box-shadow 0.15s',
-      }}
-        title={`${task.name}: ${task.startDate} → ${task.endDate}`}
-      >
-        <span style={{
-          color: '#fff',
-          fontSize: 11,
-          fontWeight: 600,
-          whiteSpace: 'nowrap',
-          overflow: 'hidden',
-          textOverflow: 'ellipsis',
-          textShadow: '0 1px 2px rgba(0,0,0,0.3)',
-        }}>
-          {task.name}
-        </span>
+        position: 'absolute', left: leftPx, top: (rowH - TASK_BAR_H) / 2,
+        width: TASK_BAR_H, height: TASK_BAR_H, borderRadius: 5,
+        background: color + '60', border: `2px dashed ${color}`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+      }} title={`Start: ${startDate} — click row to set end date`}>
+        <span style={{ color, fontSize: 14, fontWeight: 700 }}>→</span>
       </div>
     );
   }
 
-  // Only start date is set — show a "waiting for end" indicator
+  const end     = parseDate(endDate);
+  const widthPx = Math.max((dayDiff(start, end) + 1) * ppd, HANDLE_W * 2 + 4);
+
   return (
-    <div style={{
-      position: 'absolute',
-      left: leftPx,
-      top: (rowH - TASK_BAR_H) / 2,
-      width: TASK_BAR_H,
-      height: TASK_BAR_H,
-      borderRadius: 5,
-      background: color + '60',
-      border: `2px dashed ${color}`,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-    }}
-      title={`Start: ${task.startDate} — click to set end date`}
+    <div
+      style={{
+        position: 'absolute', left: leftPx, width: widthPx,
+        top: (rowH - TASK_BAR_H) / 2, height: TASK_BAR_H,
+        background: color, borderRadius: 5,
+        display: 'flex', alignItems: 'center', overflow: 'hidden',
+        boxShadow: `0 1px 4px ${color}55`, cursor: 'grab', userSelect: 'none',
+      }}
+      title={`${task.name}: ${startDate} → ${endDate}`}
+      onMouseDown={e => { e.stopPropagation(); onDragStart(e, 'move-task'); }}
+      onClick={e => { e.stopPropagation(); onBarClick?.(e); }}
     >
-      <span style={{ color, fontSize: 14, fontWeight: 700 }}>→</span>
-    </div>
-  );
-}
-
-// ─── Sub-component: Milestone Marker ─────────────────────────────────────────
-
-interface MilestoneMarkerProps {
-  milestone: GanttMilestone;
-  color: string;
-  calStart: Date;
-  ppd: number;
-  rowH: number;
-}
-
-function MilestoneMarker({ milestone, color, calStart, ppd, rowH }: MilestoneMarkerProps) {
-  if (!milestone.date) return null;
-
-  const date = parseDate(milestone.date);
-  // Center the diamond on the date column's midpoint
-  const centerX = dayDiff(calStart, date) * ppd + ppd / 2;
-  const size = MILESTONE_SZ;
-
-  return (
-    <div style={{
-      position: 'absolute',
-      left: centerX - size / 2 - 1,
-      top: (rowH - size) / 2,
-      width: size,
-      height: size,
-      background: color,
-      transform: 'rotate(45deg)',
-      borderRadius: 3,
-      boxShadow: `0 2px 6px ${color}66`,
-      cursor: 'default',
-    }}
-      title={`${milestone.name}: ${milestone.date}`}
-    />
-  );
-}
-
-// ─── Sub-component: Unplaced hint shown in empty rows ────────────────────────
-
-function UnplacedHint({ color, text }: { color: string; text: string }) {
-  return (
-    <div style={{
-      display: 'flex',
-      alignItems: 'center',
-      gap: 6,
-      padding: '0 12px',
-      height: '100%',
-      pointerEvents: 'none', // The row div below handles clicks
-    }}>
-      <span style={{
-        fontSize: 11,
-        color: color + 'aa',
-        fontStyle: 'italic',
-      }}>
-        {text}
+      <div
+        style={{ position: 'absolute', left: 0, top: 0, width: HANDLE_W, height: '100%', cursor: 'ew-resize', background: 'rgba(0,0,0,0.15)', borderRadius: '5px 0 0 5px', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        onMouseDown={e => { e.stopPropagation(); onDragStart(e, 'resize-left'); }}
+      >
+        <div style={{ width: 1.5, height: 10, background: 'rgba(255,255,255,0.5)', borderRadius: 1 }} />
+      </div>
+      <span style={{ flex: 1, paddingLeft: HANDLE_W + 4, paddingRight: HANDLE_W + 4, color: '#fff', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: '0 1px 2px rgba(0,0,0,0.3)', pointerEvents: 'none', textAlign: 'center' }}>
+        {task.name}
       </span>
+      <div
+        style={{ position: 'absolute', right: 0, top: 0, width: HANDLE_W, height: '100%', cursor: 'ew-resize', background: 'rgba(0,0,0,0.15)', borderRadius: '0 5px 5px 0', zIndex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        onMouseDown={e => { e.stopPropagation(); onDragStart(e, 'resize-right'); }}
+      >
+        <div style={{ width: 1.5, height: 10, background: 'rgba(255,255,255,0.5)', borderRadius: 1 }} />
+      </div>
     </div>
   );
 }
 
-// ─── Sub-component: Calendar Header (month row + day/week row) ───────────────
+// ─── Sub-component: Milestone With Label ──────────────────────────────────────
 
-interface CalendarHeaderProps {
-  columns: Date[];
-  viewMode: 'daily' | 'weekly';
-  colWidth: number;
-  todayDate: string;
+function MilestoneWithLabel({ milestone, color, calStart, ppd, previewDate, onDragStart, onLabelClick }: {
+  milestone: GanttMilestone; color: string; calStart: Date; ppd: number;
+  previewDate?: string | null; onDragStart: (e: React.MouseEvent) => void;
+  onLabelClick?: (e: React.MouseEvent) => void;
+}) {
+  const date = previewDate !== undefined ? previewDate : milestone.date;
+  if (!date) return null;
+  const centerX = dayDiff(calStart, parseDate(date)) * ppd + ppd / 2;
+  return (
+    <div
+      title={`${milestone.name}: ${date}`}
+      style={{ position: 'absolute', left: centerX - LABEL_W / 2, top: 0, width: LABEL_W, height: MILESTONE_ROW_H, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 4, cursor: 'grab', userSelect: 'none' }}
+      onMouseDown={e => { e.stopPropagation(); onDragStart(e); }}
+      onClick={e => { e.stopPropagation(); onLabelClick?.(e); }}
+    >
+      <span style={{ fontSize: 10, fontWeight: 700, color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: LABEL_W, lineHeight: `${MILESTONE_NAME_H}px`, textAlign: 'center', textShadow: '0 0 4px #fff, 0 0 4px #fff', pointerEvents: 'none' }}>
+        {milestone.name}
+      </span>
+      <div style={{ width: 1, height: 4, background: color + '80', flexShrink: 0, pointerEvents: 'none' }} />
+      <div style={{ width: MILESTONE_SZ, height: MILESTONE_SZ, background: color, transform: 'rotate(45deg)', borderRadius: 3, boxShadow: `0 2px 6px ${color}66`, flexShrink: 0, pointerEvents: 'none' }} />
+    </div>
+  );
 }
 
-function CalendarHeader({ columns, viewMode, colWidth, todayDate }: CalendarHeaderProps) {
-  // ── Build month spans for the top header row ──────────────────────────────
-  // Group consecutive columns that share the same "Month YYYY" label.
+// ─── Calendar Header ──────────────────────────────────────────────────────────
+
+function CalendarHeader({ columns, viewMode, colWidth, todayDate }: {
+  columns: Date[]; viewMode: 'daily' | 'weekly'; colWidth: number; todayDate: string;
+}) {
   const monthSpans: { label: string; count: number }[] = [];
   columns.forEach(col => {
     const label = `${getMonthName(col)} ${col.getFullYear()}`;
-    if (monthSpans.length && monthSpans[monthSpans.length - 1].label === label) {
-      monthSpans[monthSpans.length - 1].count++;
-    } else {
-      monthSpans.push({ label, count: 1 });
-    }
+    if (monthSpans.length && monthSpans[monthSpans.length - 1].label === label) monthSpans[monthSpans.length - 1].count++;
+    else monthSpans.push({ label, count: 1 });
   });
 
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      height: HEADER_H,
-      borderBottom: '1.5px solid var(--border-strong)',
-      background: 'var(--bg-header)',
-      position: 'sticky',
-      top: 0,
-      zIndex: 5,
-    }}>
-      {/* Month name row */}
+    <div style={{ display: 'flex', flexDirection: 'column', height: HEADER_H, borderBottom: '1.5px solid var(--border-strong)', background: 'var(--bg-header)', position: 'sticky', top: 0, zIndex: 5 }}>
       <div style={{ display: 'flex', height: 24, borderBottom: '1px solid var(--border)' }}>
         {monthSpans.map(({ label, count }) => (
-          <div
-            key={label + count}
-            style={{
-              width: count * colWidth,
-              flexShrink: 0,
-              display: 'flex',
-              alignItems: 'center',
-              paddingLeft: 8,
-              fontSize: 11,
-              fontWeight: 700,
-              color: 'var(--text-secondary)',
-              letterSpacing: '0.04em',
-              textTransform: 'uppercase',
-              borderRight: '1px solid var(--border)',
-              overflow: 'hidden',
-            }}
-          >
-            {label}
-          </div>
+          <div key={label + count} style={{ width: count * colWidth, flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 8, fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', letterSpacing: '0.04em', textTransform: 'uppercase', borderRight: '1px solid var(--border)', overflow: 'hidden' }}>{label}</div>
         ))}
       </div>
-
-      {/* Week / Day row */}
       <div style={{ display: 'flex', flex: 1 }}>
         {columns.map((col, i) => {
           const isToday = formatDate(col) === todayDate;
           const weekend = isWeekend(col);
-
           return (
-            <div
-              key={i}
-              style={{
-                width: colWidth,
-                flexShrink: 0,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                justifyContent: 'center',
-                borderRight: '1px solid var(--border)',
-                fontSize: 11,
-                fontWeight: isToday ? 700 : 500,
-                color: isToday ? 'var(--accent)' : weekend ? 'var(--text-muted)' : 'var(--text-primary)',
-                background: isToday ? 'var(--accent-light)' : 'transparent',
-                position: 'relative',
-                overflow: 'hidden',
-              }}
-            >
-              {viewMode === 'daily' ? (
-                <>
-                  <span style={{ fontSize: 9, opacity: 0.7 }}>{getDayName(col)}</span>
-                  <span>{col.getDate()}</span>
-                </>
-              ) : (
-                <>
-                  <span style={{ fontSize: 9, opacity: 0.7 }}>W{getISOWeekNumber(col)}</span>
-                  <span>{col.getDate()} {getMonthName(col)}</span>
-                </>
-              )}
+            <div key={i} style={{ width: colWidth, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderRight: '1px solid var(--border)', fontSize: 11, fontWeight: isToday ? 700 : 500, color: isToday ? 'var(--accent)' : weekend ? 'var(--text-muted)' : 'var(--text-primary)', background: isToday ? 'var(--accent-light)' : 'transparent', overflow: 'hidden' }}>
+              {viewMode === 'daily'
+                ? <><span style={{ fontSize: 9, opacity: 0.7 }}>{getDayName(col)}</span><span>{col.getDate()}</span></>
+                : <><span style={{ fontSize: 9, opacity: 0.7 }}>W{getISOWeekNumber(col)}</span><span>{col.getDate()} {getMonthName(col)}</span></>
+              }
             </div>
           );
         })}
@@ -263,246 +188,432 @@ function CalendarHeader({ columns, viewMode, colWidth, todayDate }: CalendarHead
   );
 }
 
-// ─── Main GanttChart Component ────────────────────────────────────────────────
+// ─── Grip Handle (reorder affordance) ─────────────────────────────────────────
+
+function GripHandle({ onMouseDown }: { onMouseDown: (e: React.MouseEvent) => void }) {
+  return (
+    <div
+      onMouseDown={onMouseDown}
+      title="Drag to reorder"
+      style={{
+        width: 18, height: 18, cursor: 'grab', flexShrink: 0,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        borderRadius: 3, color: 'var(--text-muted)', fontSize: 11,
+        opacity: 0.5,
+      }}
+      onMouseEnter={e => (e.currentTarget.style.opacity = '1')}
+      onMouseLeave={e => (e.currentTarget.style.opacity = '0.5')}
+    >
+      ⠿
+    </div>
+  );
+}
+
+// ─── Drop Indicator ───────────────────────────────────────────────────────────
+
+function DropIndicator({ color = 'var(--accent)' }: { color?: string }) {
+  return (
+    <div style={{
+      height: 2, background: color, borderRadius: 1,
+      margin: '0 8px', pointerEvents: 'none', zIndex: 20, position: 'relative',
+    }} />
+  );
+}
+
+// ─── Main GanttChart ──────────────────────────────────────────────────────────
 
 export default function GanttChart() {
   const { state, dispatch } = useGantt();
   const { projects, items, viewMode, calendarStart, calendarDays } = state;
 
-  const today = formatDate(new Date());
+  const today        = formatDate(new Date());
   const calStartDate = parseDate(calendarStart);
-  const ppd = pxPerDay(viewMode);
-  const colWidth = viewMode === 'daily' ? DAILY_COL_W : WEEKLY_COL_W;
-  const numCols = viewMode === 'daily' ? calendarDays : Math.ceil(calendarDays / 7);
+  const ppd          = pxPerDay(viewMode);
+  const colWidth     = viewMode === 'daily' ? DAILY_COL_W : WEEKLY_COL_W;
+  const numCols      = viewMode === 'daily' ? calendarDays : Math.ceil(calendarDays / 7);
 
-  // ── Build the flat row list ─────────────────────────────────────────────────
-  // This single array drives both the left panel and the calendar body.
+  // ── Calendar drag (move/resize bars) ─────────────────────────────────────────
+
+  const calDragStateRef   = useRef<CalDragState | null>(null);
+  const calDragPreviewRef = useRef<CalDragPreview | null>(null);
+  const [calDragTick, setCalDragTick] = useState(0);
+
+  const handleCalMouseMove = useCallback((e: MouseEvent) => {
+    const drag = calDragStateRef.current;
+    if (!drag) return;
+    const deltaDays = Math.round((e.clientX - drag.startMouseX) / drag.ppd);
+    let preview: CalDragPreview;
+    switch (drag.kind) {
+      case 'move-task': {
+        const newStart = formatDate(addDays(parseDate(drag.originalStartDate), deltaDays));
+        const dur      = dayDiff(parseDate(drag.originalStartDate), parseDate(drag.originalEndDate));
+        preview = { itemId: drag.itemId, startDate: newStart, endDate: formatDate(addDays(parseDate(newStart), dur)), date: null };
+        break;
+      }
+      case 'resize-left': {
+        const ns = formatDate(addDays(parseDate(drag.originalStartDate), deltaDays));
+        preview  = ns <= drag.originalEndDate
+          ? { itemId: drag.itemId, startDate: ns, endDate: drag.originalEndDate, date: null }
+          : calDragPreviewRef.current ?? { itemId: drag.itemId, startDate: drag.originalStartDate, endDate: drag.originalEndDate, date: null };
+        break;
+      }
+      case 'resize-right': {
+        const ne = formatDate(addDays(parseDate(drag.originalEndDate), deltaDays));
+        preview  = ne >= drag.originalStartDate
+          ? { itemId: drag.itemId, startDate: drag.originalStartDate, endDate: ne, date: null }
+          : calDragPreviewRef.current ?? { itemId: drag.itemId, startDate: drag.originalStartDate, endDate: drag.originalEndDate, date: null };
+        break;
+      }
+      case 'move-milestone':
+        preview = { itemId: drag.itemId, startDate: null, endDate: null, date: formatDate(addDays(parseDate(drag.originalDate), deltaDays)) };
+        break;
+      default: return;
+    }
+    calDragPreviewRef.current = preview;
+    setCalDragTick(t => t + 1);
+  }, []);
+
+  const handleCalMouseUp = useCallback(() => {
+    const drag    = calDragStateRef.current;
+    const preview = calDragPreviewRef.current;
+    if (drag && preview && preview.itemId === drag.itemId) {
+      if (drag.kind === 'move-milestone') {
+        dispatch({ type: 'UPDATE_ITEM', itemId: drag.itemId, patch: { date: preview.date } });
+      } else {
+        dispatch({ type: 'UPDATE_ITEM', itemId: drag.itemId, patch: { startDate: preview.startDate, endDate: preview.endDate } });
+      }
+    }
+    calDragStateRef.current   = null;
+    calDragPreviewRef.current = null;
+    document.body.style.userSelect = '';
+    document.body.style.cursor     = '';
+    document.removeEventListener('mousemove', handleCalMouseMove);
+    document.removeEventListener('mouseup',   handleCalMouseUp);
+  }, [dispatch, handleCalMouseMove]);
+
+  const startCalDrag = useCallback((e: React.MouseEvent, kind: CalDragState['kind'], item: GanttTask | GanttMilestone) => {
+    e.preventDefault(); e.stopPropagation();
+    const t = item as GanttTask;
+    const m = item as GanttMilestone;
+    calDragStateRef.current = { kind, itemId: item.id, startMouseX: e.clientX, originalStartDate: t.startDate ?? '', originalEndDate: t.endDate ?? '', originalDate: m.date ?? '', ppd, calStartDate };
+    calDragPreviewRef.current = null;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor     = kind === 'move-task' || kind === 'move-milestone' ? 'grabbing' : 'ew-resize';
+    document.addEventListener('mousemove', handleCalMouseMove);
+    document.addEventListener('mouseup',   handleCalMouseUp);
+  }, [ppd, calStartDate, handleCalMouseMove, handleCalMouseUp]);
+
+  useEffect(() => {
+    return () => {
+      document.removeEventListener('mousemove', handleCalMouseMove);
+      document.removeEventListener('mouseup',   handleCalMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor     = '';
+    };
+  }, [handleCalMouseMove, handleCalMouseUp]);
+
+  // ── Row drag (reorder in left panel) ─────────────────────────────────────────
+  /**
+   * Uses mouse events (not HTML5 DnD) so we have full control over the drop
+   * indicator position and can prevent the default ghost image.
+   *
+   * rowDragState: what is being dragged
+   * rowDropTarget: the row key we are currently hovering over (drop destination)
+   * rowDropPosition: 'before' | 'after' — which side of the target to insert at
+   */
+  const rowDragStateRef                                     = useRef<RowDragState | null>(null);
+  const [rowDropTarget,   setRowDropTarget]   = useState<string | null>(null);
+  const [rowDropPosition, setRowDropPosition] = useState<'before' | 'after'>('after');
+  const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
+
+  /** Called from the grip handle's onMouseDown */
+  const startRowDrag = useCallback((e: React.MouseEvent, dragState: RowDragState) => {
+    e.preventDefault();
+    e.stopPropagation();
+    rowDragStateRef.current = dragState;
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor     = 'grabbing';
+
+    function onMouseMove(ev: MouseEvent) {
+      // Find which registered row the cursor is over
+      let bestKey: string | null = null;
+      let bestPos: 'before' | 'after' = 'after';
+      rowRefs.current.forEach((el, key) => {
+        const rect = el.getBoundingClientRect();
+        if (ev.clientY >= rect.top && ev.clientY <= rect.bottom) {
+          bestKey = key;
+          bestPos = ev.clientY < rect.top + rect.height / 2 ? 'before' : 'after';
+        }
+      });
+      setRowDropTarget(bestKey);
+      setRowDropPosition(bestPos);
+    }
+
+    function onMouseUp() {
+      const drag       = rowDragStateRef.current;
+      const targetKey  = rowDropTarget;   // captured from state — stale closure risk
+      // Re-read from DOM instead:
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup',   onMouseUp);
+      document.body.style.userSelect = '';
+      document.body.style.cursor     = '';
+      rowDragStateRef.current = null;
+      setRowDropTarget(null);
+    }
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup',   onMouseUp);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  /**
+   * Commit the reorder on mouseup.
+   * Because rowDropTarget is state we can't reliably read it inside the closure above,
+   * so we attach a separate document mouseup that has access to a ref copy.
+   */
+  const rowDropTargetRef  = useRef<string | null>(null);
+  const rowDropPosRef     = useRef<'before' | 'after'>('after');
+  rowDropTargetRef.current  = rowDropTarget;
+  rowDropPosRef.current     = rowDropPosition;
+
+  // Attach a single stable document mouseup to commit the reorder
+  useEffect(() => {
+    function commitReorder() {
+      const drag      = rowDragStateRef.current;
+      const targetKey = rowDropTargetRef.current;
+      const pos       = rowDropPosRef.current;
+      if (!drag || !targetKey || targetKey === drag.id) return;
+
+      if (drag.kind === 'project') {
+        // Reorder projects
+        const ids      = projects.map(p => p.id);
+        const fromIdx  = ids.indexOf(drag.id);
+        let   toIdx    = ids.indexOf(targetKey);
+        if (fromIdx === -1 || toIdx === -1) return;
+        const newIds = [...ids];
+        newIds.splice(fromIdx, 1);
+        // Adjust toIdx after removal
+        toIdx = newIds.indexOf(targetKey);
+        const insertAt = pos === 'after' ? toIdx + 1 : toIdx;
+        newIds.splice(insertAt, 0, drag.id);
+        dispatch({ type: 'REORDER_PROJECTS', orderedIds: newIds });
+      } else {
+        // Reorder tasks within a project
+        const projectTasks = items
+          .filter(i => i.projectId === drag.projectId && i.type === 'task') as GanttTask[];
+        const ids     = projectTasks.map(t => t.id);
+        const fromIdx = ids.indexOf(drag.id);
+        let   toIdx   = ids.indexOf(targetKey);
+        if (fromIdx === -1 || toIdx === -1) return;
+        const newIds = [...ids];
+        newIds.splice(fromIdx, 1);
+        toIdx = newIds.indexOf(targetKey);
+        const insertAt = pos === 'after' ? toIdx + 1 : toIdx;
+        newIds.splice(insertAt, 0, drag.id);
+        dispatch({ type: 'REORDER_ITEMS', projectId: drag.projectId!, orderedIds: newIds });
+      }
+    }
+
+    document.addEventListener('mouseup', commitReorder);
+    return () => document.removeEventListener('mouseup', commitReorder);
+  }, [projects, items, dispatch]);
+
+  // ── Flat row list ─────────────────────────────────────────────────────────────
+
   const rows: CalendarRow[] = useMemo(() => {
     const result: CalendarRow[] = [];
     for (const project of projects) {
       result.push({ kind: 'header', project });
       if (!project.collapsed) {
-        const projectItems = items.filter(i => i.projectId === project.id);
-        for (const item of projectItems) {
-          result.push({ kind: 'item', item, project });
-        }
+        const tasks      = items.filter(i => i.projectId === project.id && i.type === 'task')      as GanttTask[];
+        const milestones = items.filter(i => i.projectId === project.id && i.type === 'milestone') as GanttMilestone[];
+        for (const task of tasks) result.push({ kind: 'item', item: task, project });
+        if (milestones.length > 0) result.push({ kind: 'milestones', milestones, project });
       }
     }
     return result;
   }, [projects, items]);
 
-  // ── Calendar columns ────────────────────────────────────────────────────────
   const columns = useMemo(
-    () => viewMode === 'daily'
-      ? buildDailyColumns(calStartDate, numCols)
-      : buildWeeklyColumns(calStartDate, numCols),
+    () => viewMode === 'daily' ? buildDailyColumns(calStartDate, numCols) : buildWeeklyColumns(calStartDate, numCols),
     [calStartDate, viewMode, numCols]
   );
 
   const totalCalWidth = numCols * colWidth;
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
 
-  // ── Click handler: placed on each item's calendar row ──────────────────────
-  // This converts the click X position → a date string, then updates the item.
-  const handleCalendarRowClick = useCallback((
-    e: React.MouseEvent<HTMLDivElement>,
-    row: CalendarRow & { kind: 'item' },
-    rowElement: HTMLDivElement
-  ) => {
-    // Calculate which date column was clicked
-    const rect = rowElement.getBoundingClientRect();
-    const xInRow = e.clientX - rect.left;
-    const dayOffset = Math.floor(xInRow / ppd);
+  // ── Detail panel ──────────────────────────────────────────────────────────────
+  const [detailPanel, setDetailPanel] = useState<{
+    item: GanttTask | GanttMilestone;
+    color: string;
+    anchorRect: DOMRect;
+  } | null>(null);
+
+  const openDetail = useCallback((item: GanttTask | GanttMilestone, color: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    // Use a small DOMRect centred on the click point so the panel appears at the cursor
+    const clickRect = new DOMRect(e.clientX, e.clientY, 0, 0);
+    setDetailPanel({ item, color, anchorRect: clickRect });
+  }, []);
+
+  const closeDetail = useCallback(() => setDetailPanel(null), []);
+
+  const saveDetail = useCallback((itemId: string, description: string) => {
+    dispatch({ type: 'UPDATE_ITEM', itemId, patch: { description } });
+  }, [dispatch]);
+
+  // ── Click handlers ────────────────────────────────────────────────────────────
+
+  const handleTaskRowClick = useCallback((e: React.MouseEvent<HTMLDivElement>, task: GanttTask, rowEl: HTMLDivElement) => {
+    if (calDragStateRef.current || calDragPreviewRef.current) return;
+    const dayOffset   = Math.floor((e.clientX - rowEl.getBoundingClientRect().left) / ppd);
     const clickedDate = formatDate(addDays(calStartDate, dayOffset));
-
-    const { item } = row;
-
-    if (item.type === 'milestone') {
-      // Single-click placement
-      dispatch({ type: 'UPDATE_ITEM', itemId: item.id, patch: { date: clickedDate } });
-    } else {
-      // Task: two-click placement
-      const task = item as GanttTask;
-
-      if (!task.startDate) {
-        // First click: set start date
-        dispatch({ type: 'UPDATE_ITEM', itemId: task.id, patch: { startDate: clickedDate, endDate: null } });
-      } else if (!task.endDate) {
-        if (clickedDate >= task.startDate) {
-          // Second click after start: set end date
-          dispatch({ type: 'UPDATE_ITEM', itemId: task.id, patch: { endDate: clickedDate } });
-        } else {
-          // Clicked before start: treat as a new start (reset)
-          dispatch({ type: 'UPDATE_ITEM', itemId: task.id, patch: { startDate: clickedDate, endDate: null } });
-        }
-      } else {
-        // Already fully placed: clicking resets to move the start
-        dispatch({ type: 'UPDATE_ITEM', itemId: task.id, patch: { startDate: clickedDate, endDate: null } });
-      }
+    if (!task.startDate) {
+      dispatch({ type: 'UPDATE_ITEM', itemId: task.id, patch: { startDate: clickedDate, endDate: null } });
+    } else if (!task.endDate) {
+      if (clickedDate >= task.startDate) dispatch({ type: 'UPDATE_ITEM', itemId: task.id, patch: { endDate: clickedDate } });
+      else dispatch({ type: 'UPDATE_ITEM', itemId: task.id, patch: { startDate: clickedDate, endDate: null } });
     }
   }, [calStartDate, ppd, dispatch]);
 
-  // ── Delete item handler (keyboard Delete on hovered row) ───────────────────
-  const [hoveredItemId, setHoveredItemId] = useState<string | null>(null);
+  const handleMilestonesRowClick = useCallback((e: React.MouseEvent<HTMLDivElement>, milestones: GanttMilestone[], rowEl: HTMLDivElement) => {
+    if (calDragStateRef.current || calDragPreviewRef.current) return;
+    const firstUnplaced = milestones.find(m => m.date === null);
+    if (!firstUnplaced) return;
+    const dayOffset   = Math.floor((e.clientX - rowEl.getBoundingClientRect().left) / ppd);
+    const clickedDate = formatDate(addDays(calStartDate, dayOffset));
+    dispatch({ type: 'UPDATE_ITEM', itemId: firstUnplaced.id, patch: { date: clickedDate } });
+  }, [calStartDate, ppd, dispatch]);
 
-  // ── Today marker position ────────────────────────────────────────────────────
-  // Horizontal line drawn at today's column position
-  const todayOffset = dayDiff(calStartDate, new Date()) * ppd;
+  const todayOffset  = dayDiff(calStartDate, new Date()) * ppd;
   const todayVisible = todayOffset >= 0 && todayOffset <= totalCalWidth;
+  const calDragPreview = calDragPreviewRef.current;
+  void calDragTick;
 
   return (
-    <div style={{
-      flex: 1,
-      overflow: 'auto',
-      display: 'flex',
-      background: 'var(--bg-surface)',
-      position: 'relative',
-    }}>
-      {/* ─── Wrapper: left panel + calendar in one scrollable div ─── */}
+    <>
+    <div className='gantt-scroll' style={{ flex: 1, overflow: 'auto', display: 'flex', background: 'var(--bg-surface)' }}>
       <div style={{ display: 'flex', minWidth: LEFT_W + totalCalWidth, minHeight: '100%' }}>
 
-        {/* ══════════════════════════════════════════
-            LEFT PANEL  (sticky left, scrolls with page vertically)
-        ══════════════════════════════════════════ */}
-        <div style={{
-          position: 'sticky',
-          left: 0,
-          width: LEFT_W,
-          flexShrink: 0,
-          background: 'var(--bg-surface)',
-          borderRight: '1.5px solid var(--border-strong)',
-          zIndex: 10,
-          display: 'flex',
-          flexDirection: 'column',
-        }}>
-          {/* Left panel header (aligns with calendar column header) */}
-          <div style={{
-            height: HEADER_H,
-            display: 'flex',
-            alignItems: 'center',
-            paddingLeft: 16,
-            borderBottom: '1.5px solid var(--border-strong)',
-            background: 'var(--bg-header)',
-            position: 'sticky',
-            top: 0,
-            zIndex: 11,
-          }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>
-              Projects / Tasks
-            </span>
+        {/* ── LEFT PANEL ───────────────────────────────────────────────────── */}
+        <div style={{ position: 'sticky', left: 0, width: LEFT_W, flexShrink: 0, background: 'var(--bg-surface)', borderRight: '1.5px solid var(--border-strong)', zIndex: 10, display: 'flex', flexDirection: 'column' }}>
+          <div style={{ height: HEADER_H, display: 'flex', alignItems: 'center', paddingLeft: 16, borderBottom: '1.5px solid var(--border-strong)', background: 'var(--bg-header)', position: 'sticky', top: 0, zIndex: 11 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Projects / Tasks</span>
           </div>
 
-          {/* Left panel rows */}
-          {rows.map((row, rowIdx) => {
+          {rows.map((row, rowIndex) => {
             if (row.kind === 'header') {
+              const key = row.project.id;
+              const showDropBefore = rowDropTarget === key && rowDropPosition === 'before' && rowDragStateRef.current?.kind === 'project';
+              const showDropAfter  = rowDropTarget === key && rowDropPosition === 'after'  && rowDragStateRef.current?.kind === 'project';
               return (
-                <LeftPanelHeader
-                  key={row.project.id}
-                  project={row.project}
-                  rowH={ROW_H}
-                  onToggle={() => dispatch({ type: 'TOGGLE_COLLAPSE', projectId: row.project.id })}
-                  onDelete={() => dispatch({ type: 'DELETE_PROJECT', projectId: row.project.id })}
-                />
+                <React.Fragment key={key}>
+                  {showDropBefore && <DropIndicator color={row.project.color} />}
+                  <LeftPanelHeader
+                    ref={el => { if (el) rowRefs.current.set(key, el); else rowRefs.current.delete(key); }}
+                    project={row.project} rowH={ROW_H}
+                    onToggle={() => dispatch({ type: 'TOGGLE_COLLAPSE', projectId: row.project.id })}
+                    onDelete={() => dispatch({ type: 'DELETE_PROJECT', projectId: row.project.id })}
+                    onGripMouseDown={e => startRowDrag(e, { kind: 'project', id: row.project.id })}
+                    isDragOver={rowDropTarget === key}
+                  />
+                  {showDropAfter && <DropIndicator color={row.project.color} />}
+                </React.Fragment>
               );
             }
+
+            if (row.kind === 'item') {
+              const key       = row.item.id;
+              const projectId = row.project.id;
+              const isDragKindTask = rowDragStateRef.current?.kind === 'task' && rowDragStateRef.current?.projectId === projectId;
+              const showDropBefore = rowDropTarget === key && rowDropPosition === 'before' && isDragKindTask;
+              const showDropAfter  = rowDropTarget === key && rowDropPosition === 'after'  && isDragKindTask;
+              return (
+                <React.Fragment key={key}>
+                  {showDropBefore && <DropIndicator color={row.project.color} />}
+                  <LeftPanelTaskRow
+                    ref={el => { if (el) rowRefs.current.set(key, el); else rowRefs.current.delete(key); }}
+                    row={row} rowH={ROW_H}
+                    isHovered={hoveredKey === key}
+                    onHover={setHoveredKey}
+                    onDelete={() => dispatch({ type: 'DELETE_ITEM', itemId: row.item.id })}
+                    onGripMouseDown={e => startRowDrag(e, { kind: 'task', id: row.item.id, projectId: row.project.id })}
+                  />
+                  {showDropAfter && <DropIndicator color={row.project.color} />}
+                </React.Fragment>
+              );
+            }
+
+            // milestones row — not reorderable (always last in project)
             return (
-              <LeftPanelItemRow
-                key={row.item.id}
-                row={row}
-                rowH={ROW_H}
-                isHovered={hoveredItemId === row.item.id}
-                onHover={setHoveredItemId}
-                onDelete={() => dispatch({ type: 'DELETE_ITEM', itemId: row.item.id })}
-                rowIdx={rowIdx}
+              <LeftPanelMilestonesRow
+                key={`ms-${row.project.id}`}
+                row={row} rowH={MILESTONE_ROW_H}
+                isHovered={hoveredKey === `ms-${row.project.id}`}
+                onHover={setHoveredKey}
+                onDeleteMilestone={id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
               />
             );
           })}
         </div>
 
-        {/* ══════════════════════════════════════════
-            CALENDAR AREA (scrolls horizontally)
-        ══════════════════════════════════════════ */}
+        {/* ── CALENDAR AREA ────────────────────────────────────────────────── */}
         <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
+          <CalendarHeader columns={columns} viewMode={viewMode} colWidth={colWidth} todayDate={today} />
 
-          {/* Column headers */}
-          <CalendarHeader
-            columns={columns}
-            viewMode={viewMode}
-            colWidth={colWidth}
-            todayDate={today}
-          />
-
-          {/* Calendar body rows */}
           <div style={{ position: 'relative', flex: 1 }}>
-
-            {/* Today vertical line */}
             {todayVisible && (
-              <div style={{
-                position: 'absolute',
-                left: todayOffset,
-                top: 0,
-                bottom: 0,
-                width: 2,
-                background: 'var(--accent)',
-                opacity: 0.5,
-                zIndex: 3,
-                pointerEvents: 'none',
-              }} />
+              <div style={{ position: 'absolute', left: todayOffset, top: 0, bottom: 0, width: 2, background: 'var(--accent)', opacity: 0.5, zIndex: 3, pointerEvents: 'none' }} />
             )}
 
-            {rows.map((row, rowIdx) => {
+            {rows.map(row => {
               if (row.kind === 'header') {
+                return <CalendarSwimLaneRow key={row.project.id} totalWidth={totalCalWidth} rowH={ROW_H} columns={columns} colWidth={colWidth} />;
+              }
+
+              if (row.kind === 'item') {
+                const task    = row.item;
+                const preview = calDragPreview?.itemId === task.id
+                  ? { startDate: calDragPreview.startDate, endDate: calDragPreview.endDate }
+                  : undefined;
                 return (
-                  <CalendarHeaderRow
-                    key={row.project.id}
-                    project={row.project}
-                    totalWidth={totalCalWidth}
-                    rowH={ROW_H}
-                    columns={columns}
-                    colWidth={colWidth}
+                  <CalendarTaskRow
+                    key={task.id} task={task} project={row.project}
+                    rowH={ROW_H} totalWidth={totalCalWidth}
+                    calStartDate={calStartDate} ppd={ppd}
+                    columns={columns} colWidth={colWidth}
+                    isHovered={hoveredKey === task.id}
+                    isHalf={!!task.startDate && !task.endDate}
+                    preview={preview}
+                    onHover={setHoveredKey}
+                    onRowClick={handleTaskRowClick}
+                    onDragStart={(e, kind) => startCalDrag(e, kind, task)}
+                    onBarClick={e => openDetail(task, row.project.color, e)}
+                    today={today}
                   />
                 );
               }
 
-              // Item row — clickable to place tasks/milestones
-              const isUnplaced =
-                row.item.type === 'task'
-                  ? !(row.item as GanttTask).endDate
-                  : !(row.item as GanttMilestone).date;
-
-              const isHalf =
-                row.item.type === 'task' &&
-                !!(row.item as GanttTask).startDate &&
-                !(row.item as GanttTask).endDate;
-
               return (
-                <CalendarItemRow
-                  key={row.item.id}
-                  row={row}
-                  rowH={ROW_H}
-                  totalWidth={totalCalWidth}
-                  calStartDate={calStartDate}
-                  ppd={ppd}
-                  columns={columns}
-                  colWidth={colWidth}
-                  isUnplaced={isUnplaced}
-                  isHalf={isHalf}
-                  isHovered={hoveredItemId === row.item.id}
-                  onHover={setHoveredItemId}
-                  onRowClick={handleCalendarRowClick}
+                <CalendarMilestonesRow
+                  key={`ms-${row.project.id}`}
+                  milestones={row.milestones} project={row.project}
+                  rowH={MILESTONE_ROW_H} totalWidth={totalCalWidth}
+                  calStartDate={calStartDate} ppd={ppd}
+                  columns={columns} colWidth={colWidth}
+                  isHovered={hoveredKey === `ms-${row.project.id}`}
+                  onHover={id => setHoveredKey(id)}
+                  onRowClick={handleMilestonesRowClick}
+                  onMilestoneDragStart={(e, m) => startCalDrag(e, 'move-milestone', m)}
+                  onMilestoneLabelClick={(e, m) => openDetail(m, row.project.color, e)}
+                  dragPreview={calDragPreview}
                   today={today}
-                  rowIdx={rowIdx}
                 />
               );
             })}
 
-            {/* Empty state when no projects */}
             {rows.length === 0 && (
-              <div style={{
-                padding: '60px 40px',
-                textAlign: 'center',
-                color: 'var(--text-muted)',
-                fontSize: 13,
-              }}>
+              <div style={{ padding: '60px 40px', textAlign: 'center', color: 'var(--text-muted)' }}>
                 <div style={{ fontSize: 36, marginBottom: 12 }}>📊</div>
                 <p style={{ fontWeight: 600, marginBottom: 6 }}>No swim lanes yet</p>
                 <p>Click <strong>+ Add Swim Lane</strong> in the toolbar to get started.</p>
@@ -512,317 +623,361 @@ export default function GanttChart() {
         </div>
       </div>
     </div>
+
+    {/* Detail panel — floats above everything */}
+    {detailPanel && (
+      <DetailPanel
+        item={detailPanel.item}
+        color={detailPanel.color}
+        anchorRect={detailPanel.anchorRect}
+        onClose={closeDetail}
+        onSave={desc => saveDetail(detailPanel.item.id, desc)}
+      />
+    )}
+    </>
   );
 }
 
-// ─── Left Panel: Project Header Row ──────────────────────────────────────────
+// ─── Left Panel: Project Header ───────────────────────────────────────────────
 
-function LeftPanelHeader({
-  project, rowH, onToggle, onDelete
-}: {
-  project: Project;
-  rowH: number;
-  onToggle: () => void;
-  onDelete: () => void;
-}) {
+const LeftPanelHeader = React.forwardRef<HTMLDivElement, {
+  project: Project; rowH: number; onToggle: () => void; onDelete: () => void;
+  onGripMouseDown: (e: React.MouseEvent) => void; isDragOver: boolean;
+}>(({ project, rowH, onToggle, onDelete, onGripMouseDown, isDragOver }, ref) => {
   const [showDelete, setShowDelete] = useState(false);
-
   return (
     <div
+      ref={ref}
       style={{
-        height: rowH,
-        display: 'flex',
-        alignItems: 'center',
-        paddingLeft: 10,
-        paddingRight: 8,
-        gap: 6,
-        background: 'var(--bg-swimlane)',
+        height: rowH, display: 'flex', alignItems: 'center',
+        paddingLeft: 6, paddingRight: 8, gap: 4,
+        background: isDragOver ? project.color + '18' : 'var(--bg-swimlane)',
         borderBottom: '1px solid var(--border)',
-        cursor: 'pointer',
-        userSelect: 'none',
+        userSelect: 'none', transition: 'background 0.1s',
       }}
       onMouseEnter={() => setShowDelete(true)}
       onMouseLeave={() => setShowDelete(false)}
-      onClick={onToggle}
     >
-      {/* Collapse/expand triangle */}
-      <span style={{
-        fontSize: 9,
-        color: project.color,
-        transform: project.collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
-        transition: 'transform 0.15s',
-        display: 'inline-block',
-        flexShrink: 0,
-      }}>▼</span>
-
-      {/* Color dot */}
-      <div style={{
-        width: 10, height: 10, borderRadius: 3,
-        background: project.color, flexShrink: 0,
-      }} />
-
-      {/* Project name */}
-      <span style={{
-        flex: 1,
-        fontWeight: 700,
-        fontSize: 12,
-        color: 'var(--text-primary)',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-      }}>
-        {project.name}
-      </span>
-
-      {/* Delete button (visible on hover) */}
+      <GripHandle onMouseDown={onGripMouseDown} />
+      <span
+        style={{ fontSize: 9, color: project.color, transform: project.collapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', display: 'inline-block', flexShrink: 0, cursor: 'pointer' }}
+        onClick={onToggle}
+      >▼</span>
+      <div style={{ width: 10, height: 10, borderRadius: 3, background: project.color, flexShrink: 0 }} />
+      <span
+        style={{ flex: 1, fontWeight: 700, fontSize: 12, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+        onClick={onToggle}
+      >{project.name}</span>
       {showDelete && (
         <button
           onClick={e => { e.stopPropagation(); onDelete(); }}
-          title="Delete swim lane"
-          style={{
-            width: 20, height: 20,
-            borderRadius: 4,
-            background: '#fee2e2',
-            color: '#ef4444',
-            fontSize: 12,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0,
-          }}
+          style={{ width: 20, height: 20, borderRadius: 4, background: '#fee2e2', color: '#ef4444', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
         >×</button>
       )}
     </div>
   );
-}
+});
+LeftPanelHeader.displayName = 'LeftPanelHeader';
 
-// ─── Left Panel: Item Row (task or milestone) ─────────────────────────────────
+// ─── Left Panel: Task Row ─────────────────────────────────────────────────────
 
-function LeftPanelItemRow({
-  row, rowH, isHovered, onHover, onDelete
-}: {
-  row: CalendarRow & { kind: 'item' };
-  rowH: number;
-  isHovered: boolean;
-  onHover: (id: string | null) => void;
-  onDelete: () => void;
-  rowIdx: number;
-}) {
+const LeftPanelTaskRow = React.forwardRef<HTMLDivElement, {
+  row: CalendarRow & { kind: 'item' }; rowH: number;
+  isHovered: boolean; onHover: (id: string | null) => void; onDelete: () => void;
+  onGripMouseDown: (e: React.MouseEvent) => void;
+}>(({ row, rowH, isHovered, onHover, onDelete, onGripMouseDown }, ref) => {
   const { item, project } = row;
-  const isMilestone = item.type === 'milestone';
-
   return (
     <div
+      ref={ref}
       style={{
-        height: rowH,
-        display: 'flex',
-        alignItems: 'center',
-        paddingLeft: 28,
-        paddingRight: 8,
-        gap: 8,
+        height: rowH, display: 'flex', alignItems: 'center',
+        paddingLeft: 6, paddingRight: 8, gap: 4,
         background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)',
-        borderBottom: '1px solid var(--border)',
-        transition: 'background 0.1s',
+        borderBottom: '1px solid var(--border)', transition: 'background 0.1s',
       }}
       onMouseEnter={() => onHover(item.id)}
       onMouseLeave={() => onHover(null)}
     >
-      {/* Type icon */}
-      {isMilestone ? (
-        // Small rotated square = diamond shape
-        <div style={{
-          width: 9, height: 9,
-          background: project.color,
-          transform: 'rotate(45deg)',
-          borderRadius: 2,
-          flexShrink: 0,
-        }} />
-      ) : (
-        // Horizontal bar icon for tasks
-        <div style={{
-          width: 12, height: 5,
-          background: project.color,
-          borderRadius: 2,
-          flexShrink: 0,
-        }} />
-      )}
-
-      {/* Name */}
-      <span style={{
-        flex: 1,
-        fontSize: 12,
-        color: 'var(--text-primary)',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        whiteSpace: 'nowrap',
-      }}>
+      <GripHandle onMouseDown={onGripMouseDown} />
+      <div style={{ width: 12, height: 5, background: project.color, borderRadius: 2, flexShrink: 0 }} />
+      <span style={{ flex: 1, fontSize: 12, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {item.name}
       </span>
-
-      {/* Delete button */}
       {isHovered && (
-        <button
-          onClick={onDelete}
-          title="Delete"
-          style={{
-            width: 18, height: 18,
-            borderRadius: 4,
-            background: '#fee2e2',
-            color: '#ef4444',
-            fontSize: 11,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            flexShrink: 0,
-          }}
-        >×</button>
+        <button onClick={onDelete} style={{ width: 18, height: 18, borderRadius: 4, background: '#fee2e2', color: '#ef4444', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>×</button>
       )}
+    </div>
+  );
+});
+LeftPanelTaskRow.displayName = 'LeftPanelTaskRow';
+
+// ─── Left Panel: Milestones Row ───────────────────────────────────────────────
+
+function LeftPanelMilestonesRow({ row, rowH, isHovered, onHover, onDeleteMilestone }: {
+  row: CalendarRow & { kind: 'milestones' }; rowH: number;
+  isHovered: boolean; onHover: (key: string | null) => void; onDeleteMilestone: (id: string) => void;
+}) {
+  const { milestones, project } = row;
+  const hoverKey      = `ms-${project.id}`;
+  const unplacedCount = milestones.filter(m => m.date === null).length;
+  return (
+    <div
+      style={{ height: rowH, display: 'flex', flexDirection: 'column', justifyContent: 'center', paddingLeft: 28, paddingRight: 8, background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)', borderBottom: '1px solid var(--border)', transition: 'background 0.1s', gap: 3 }}
+      onMouseEnter={() => onHover(hoverKey)}
+      onMouseLeave={() => onHover(null)}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div style={{ width: 9, height: 9, background: project.color, transform: 'rotate(45deg)', borderRadius: 2, flexShrink: 0 }} />
+        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>Milestones</span>
+        {unplacedCount > 0 && (
+          <span style={{ fontSize: 10, fontWeight: 600, color: project.color, background: project.color + '18', border: `1px solid ${project.color}40`, borderRadius: 10, padding: '0px 6px' }}>
+            {unplacedCount} to place
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1, paddingLeft: 17 }}>
+        {milestones.map(m => (
+          <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{ fontSize: 10, color: m.date ? 'var(--text-primary)' : 'var(--text-muted)', fontStyle: m.date ? 'normal' : 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
+              {m.name}{!m.date ? ' (unplaced)' : ''}
+            </span>
+            {isHovered && (
+              <button onClick={() => onDeleteMilestone(m.id)} style={{ width: 14, height: 14, borderRadius: 3, background: '#fee2e2', color: '#ef4444', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>×</button>
+            )}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-// ─── Calendar: Project Header Row (swim lane divider) ─────────────────────────
+// ─── Calendar: Background Row ─────────────────────────────────────────────────
 
-function CalendarHeaderRow({
-  project, totalWidth, rowH, columns, colWidth
-}: {
-  project: Project;
-  totalWidth: number;
-  rowH: number;
-  columns: Date[];
-  colWidth: number;
-}) {
+function CalendarSwimLaneRow({ totalWidth, rowH, columns, colWidth }: { totalWidth: number; rowH: number; columns: Date[]; colWidth: number }) {
   return (
-    <div style={{
-      height: rowH,
-      width: totalWidth,
-      position: 'relative',
-      background: 'var(--bg-swimlane)',
-      borderBottom: '1px solid var(--border)',
-      display: 'flex',
-    }}>
-      {/* Vertical column dividers */}
+    <div style={{ height: rowH, width: totalWidth, background: 'var(--bg-swimlane)', borderBottom: '1px solid var(--border)', display: 'flex' }}>
       {columns.map((col, i) => (
-        <div key={i} style={{
-          width: colWidth,
-          height: '100%',
-          borderRight: '1px solid var(--border)',
-          background: isWeekend(col) && colWidth < 50 ? '#f9fafb' : 'transparent',
-        }} />
+        <div key={i} style={{ width: colWidth, height: '100%', borderRight: '1px solid var(--border)', background: isWeekend(col) && colWidth < 50 ? '#f9fafb' : 'transparent' }} />
       ))}
     </div>
   );
 }
 
-// ─── Calendar: Item Row ───────────────────────────────────────────────────────
+// ─── Calendar: Task Row ───────────────────────────────────────────────────────
 
-interface CalendarItemRowProps {
-  row: CalendarRow & { kind: 'item' };
-  rowH: number;
-  totalWidth: number;
-  calStartDate: Date;
-  ppd: number;
-  columns: Date[];
-  colWidth: number;
-  isUnplaced: boolean;
-  isHalf: boolean; // task with start but no end
-  isHovered: boolean;
+function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, isHalf, preview, onHover, onRowClick, onDragStart, onBarClick, today }: {
+  task: GanttTask; project: Project; rowH: number; totalWidth: number; calStartDate: Date; ppd: number;
+  columns: Date[]; colWidth: number; isHovered: boolean; isHalf: boolean;
+  preview?: { startDate: string | null; endDate: string | null };
   onHover: (id: string | null) => void;
-  onRowClick: (e: React.MouseEvent<HTMLDivElement>, row: CalendarRow & { kind: 'item' }, el: HTMLDivElement) => void;
+  onRowClick: (e: React.MouseEvent<HTMLDivElement>, task: GanttTask, el: HTMLDivElement) => void;
+  onDragStart: (e: React.MouseEvent, kind: 'move-task' | 'resize-left' | 'resize-right') => void;
+  onBarClick: (e: React.MouseEvent) => void;
   today: string;
-  rowIdx: number;
-}
-
-function CalendarItemRow({
-  row, rowH, totalWidth, calStartDate, ppd, columns, colWidth,
-  isUnplaced, isHalf, isHovered, onHover, onRowClick, today
-}: CalendarItemRowProps) {
-  const { item, project } = row;
-  const rowRef = useRef<HTMLDivElement>(null);
-
-  // Show a pulsing cursor hint when the item needs placement
-  const cursor = isUnplaced ? 'crosshair' : 'default';
-
+}) {
+  const rowRef     = useRef<HTMLDivElement>(null);
+  const isUnplaced = !task.startDate || !task.endDate;
   return (
     <div
       ref={rowRef}
-      style={{
-        height: rowH,
-        width: totalWidth,
-        position: 'relative',
-        background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)',
-        borderBottom: '1px solid var(--border)',
-        cursor,
-        transition: 'background 0.1s',
-        display: 'flex',
-      }}
-      onMouseEnter={() => onHover(item.id)}
+      style={{ height: rowH, width: totalWidth, position: 'relative', background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)', borderBottom: '1px solid var(--border)', cursor: isUnplaced ? 'crosshair' : 'default', transition: 'background 0.1s', display: 'flex' }}
+      onMouseEnter={() => onHover(task.id)}
       onMouseLeave={() => onHover(null)}
-      onClick={e => {
-        if (rowRef.current) onRowClick(e, row, rowRef.current);
-      }}
+      onClick={e => { if (rowRef.current) onRowClick(e, task, rowRef.current); }}
     >
-      {/* ── Column background cells ─────────────────────────────────────── */}
-      {columns.map((col, i) => {
-        const isToday = formatDate(col) === today;
-        return (
-          <div key={i} style={{
-            width: colWidth,
-            height: '100%',
-            flexShrink: 0,
-            borderRight: '1px solid var(--border)',
-            background: isToday
-              ? 'var(--accent-light)'
-              : (isWeekend(col) && colWidth < 50 ? '#f9fafb' : 'transparent'),
-          }} />
-        );
-      })}
-
-      {/* ── Placement hint overlay (when not yet placed) ─────────────────── */}
+      {columns.map((col, i) => (
+        <div key={i} style={{ width: colWidth, height: '100%', flexShrink: 0, borderRight: '1px solid var(--border)', background: formatDate(col) === today ? 'var(--accent-light)' : (isWeekend(col) && colWidth < 50 ? '#f9fafb' : 'transparent') }} />
+      ))}
       {isUnplaced && isHovered && (
-        <div style={{
-          position: 'absolute',
-          inset: 0,
-          display: 'flex',
-          alignItems: 'center',
-          paddingLeft: 12,
-          pointerEvents: 'none',
-          zIndex: 2,
-        }}>
-          <span style={{
-            fontSize: 11,
-            color: project.color,
-            fontStyle: 'italic',
-            background: project.color + '12',
-            padding: '2px 8px',
-            borderRadius: 4,
-            border: `1px dashed ${project.color}60`,
-          }}>
-            {item.type === 'milestone'
-              ? '🔷 Click to place milestone'
-              : isHalf
-                ? '→ Click to set end date'
-                : '→ Click to set start date'}
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', paddingLeft: 12, pointerEvents: 'none', zIndex: 2 }}>
+          <span style={{ fontSize: 11, color: project.color, fontStyle: 'italic', background: project.color + '12', padding: '2px 8px', borderRadius: 4, border: `1px dashed ${project.color}60` }}>
+            {isHalf ? '→ Click to set end date' : '→ Click to set start date'}
           </span>
         </div>
       )}
-
-      {/* ── Task bar or milestone marker ──────────────────────────────────── */}
-      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 3 }}>
-        {item.type === 'task' ? (
-          <TaskBar
-            task={item as GanttTask}
-            color={project.color}
-            calStart={calStartDate}
-            ppd={ppd}
-            rowH={rowH}
-          />
-        ) : (
-          <MilestoneMarker
-            milestone={item as GanttMilestone}
-            color={project.color}
-            calStart={calStartDate}
-            ppd={ppd}
-            rowH={rowH}
-          />
-        )}
+      <div style={{ position: 'absolute', inset: 0, zIndex: 3 }}>
+        <TaskBar task={task} color={project.color} calStart={calStartDate} ppd={ppd} rowH={rowH} preview={preview} onDragStart={onDragStart} onBarClick={onBarClick} />
       </div>
+    </div>
+  );
+}
+
+// ─── Calendar: Milestones Row ─────────────────────────────────────────────────
+
+function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, onHover, onRowClick, onMilestoneDragStart, onMilestoneLabelClick, dragPreview, today }: {
+  milestones: GanttMilestone[]; project: Project; rowH: number; totalWidth: number; calStartDate: Date; ppd: number;
+  columns: Date[]; colWidth: number; isHovered: boolean; onHover: (key: string | null) => void;
+  onRowClick: (e: React.MouseEvent<HTMLDivElement>, milestones: GanttMilestone[], el: HTMLDivElement) => void;
+  onMilestoneDragStart: (e: React.MouseEvent, milestone: GanttMilestone) => void;
+  onMilestoneLabelClick: (e: React.MouseEvent, milestone: GanttMilestone) => void;
+  dragPreview: CalDragPreview | null; today: string;
+}) {
+  const rowRef        = useRef<HTMLDivElement>(null);
+  const hoverKey      = `ms-${project.id}`;
+  const hasUnplaced   = milestones.some(m => m.date === null);
+  const firstUnplaced = milestones.find(m => m.date === null);
+  return (
+    <div
+      ref={rowRef}
+      style={{ height: rowH, width: totalWidth, position: 'relative', background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)', borderBottom: '1px solid var(--border)', cursor: hasUnplaced ? 'crosshair' : 'default', transition: 'background 0.1s', display: 'flex' }}
+      onMouseEnter={() => onHover(hoverKey)}
+      onMouseLeave={() => onHover(null)}
+      onClick={e => { if (rowRef.current) onRowClick(e, milestones, rowRef.current); }}
+    >
+      {columns.map((col, i) => (
+        <div key={i} style={{ width: colWidth, height: '100%', flexShrink: 0, borderRight: '1px solid var(--border)', background: formatDate(col) === today ? 'var(--accent-light)' : (isWeekend(col) && colWidth < 50 ? '#f9fafb' : 'transparent') }} />
+      ))}
+      {hasUnplaced && isHovered && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', paddingLeft: 12, pointerEvents: 'none', zIndex: 2 }}>
+          <span style={{ fontSize: 11, color: project.color, fontStyle: 'italic', background: project.color + '12', padding: '2px 8px', borderRadius: 4, border: `1px dashed ${project.color}60` }}>
+            🔷 Click to place "{firstUnplaced?.name}"
+          </span>
+        </div>
+      )}
+      <div style={{ position: 'absolute', inset: 0, zIndex: 3 }}>
+        {milestones.filter(m => m.date !== null).map(m => (
+          <MilestoneWithLabel
+            key={m.id} milestone={m} color={project.color} calStart={calStartDate} ppd={ppd}
+            previewDate={dragPreview?.itemId === m.id ? dragPreview.date : undefined}
+            onDragStart={e => onMilestoneDragStart(e, m)}
+            onLabelClick={e => onMilestoneLabelClick(e, m)}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Detail Panel ─────────────────────────────────────────────────────────────
+// Floats near the clicked item. Saves description to Firestore on close.
+
+export function DetailPanel({ item, color, anchorRect, onClose, onSave }: {
+  item: GanttTask | GanttMilestone;
+  color: string;
+  anchorRect: DOMRect;
+  onClose: () => void;
+  onSave: (description: string) => void;
+}) {
+  const [desc, setDesc] = useState(item.description ?? '');
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  // Position the panel below the clicked element, keeping it inside the viewport
+  const PANEL_W = 300;
+  const PANEL_H = 220;
+  // Position the panel at the click point, nudging inward if it would overflow the viewport
+  const left = Math.min(anchorRect.left + 12, window.innerWidth  - PANEL_W - 16);
+  const top  = anchorRect.top  + PANEL_H > window.innerHeight
+    ? anchorRect.top  - PANEL_H - 8
+    : anchorRect.top  + 12;
+
+  // Close on outside click
+  useEffect(() => {
+    function onPointerDown(e: PointerEvent) {
+      if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
+        onSave(desc);
+        onClose();
+      }
+    }
+    // Delay so the same click that opened the panel doesn't immediately close it
+    const t = setTimeout(() => document.addEventListener('pointerdown', onPointerDown), 0);
+    return () => { clearTimeout(t); document.removeEventListener('pointerdown', onPointerDown); };
+  }, [desc, onClose, onSave]);
+
+  // Also close on Escape
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') { onSave(desc); onClose(); }
+    }
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [desc, onClose, onSave]);
+
+  const isMilestone = item.type === 'milestone';
+  const dateLabel   = isMilestone
+    ? ((item as GanttMilestone).date ?? 'unplaced')
+    : `${(item as GanttTask).startDate ?? '?'} → ${(item as GanttTask).endDate ?? '?'}`;
+
+  return (
+    <div
+      ref={panelRef}
+      style={{
+        position: 'fixed',
+        left,
+        top,
+        width: PANEL_W,
+        background: 'var(--bg-surface)',
+        border: `1.5px solid ${color}`,
+        borderRadius: 10,
+        boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+        zIndex: 1000,
+        padding: 14,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 10,
+      }}
+    >
+      {/* Header */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+        <div style={{ width: 10, height: 10, borderRadius: isMilestone ? 2 : 3, background: color, transform: isMilestone ? 'rotate(45deg)' : 'none', flexShrink: 0, marginTop: 3 }} />
+        <div style={{ flex: 1 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.3 }}>{item.name}</div>
+          <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>{dateLabel}</div>
+        </div>
+        <button
+          onClick={() => { onSave(desc); onClose(); }}
+          style={{ width: 20, height: 20, borderRadius: 4, background: 'var(--bg-header)', color: 'var(--text-secondary)', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+        >×</button>
+      </div>
+
+      {/* Divider */}
+      <div style={{ height: 1, background: 'var(--border)' }} />
+
+      {/* Description */}
+      <div>
+        <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 6 }}>
+          Description
+        </label>
+        <textarea
+          autoFocus
+          value={desc}
+          onChange={e => setDesc(e.target.value)}
+          placeholder="Add notes, context, or details…"
+          style={{
+            width: '100%',
+            height: 160,
+            resize: 'vertical',
+            fontSize: 12,
+            color: 'var(--text-primary)',
+            background: 'var(--bg-app)',
+            border: '1.5px solid var(--border)',
+            borderRadius: 6,
+            padding: '7px 9px',
+            lineHeight: 1.5,
+            outline: 'none',
+            boxSizing: 'border-box',
+            fontFamily: 'inherit',
+          }}
+          onFocus={e => (e.target.style.borderColor = color)}
+          onBlur={e => (e.target.style.borderColor = 'var(--border)')}
+        />
+      </div>
+
+      {/* Save button */}
+      <button
+        onClick={() => { onSave(desc); onClose(); }}
+        style={{
+          background: color,
+          color: '#fff',
+          borderRadius: 6,
+          padding: '6px 0',
+          fontSize: 12,
+          fontWeight: 700,
+          width: '100%',
+        }}
+      >
+        Save
+      </button>
     </div>
   );
 }

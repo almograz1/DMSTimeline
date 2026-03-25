@@ -6,7 +6,6 @@ import AddItemModal from './components/AddItemModal';
 import './index.css';
 
 // ─── Toolbar ──────────────────────────────────────────────────────────────────
-// Separated into its own inner component so it can access GanttContext.
 
 function Toolbar({
   onAddProject,
@@ -21,7 +20,6 @@ function Toolbar({
   const { viewMode } = state;
   const hasProjects = state.projects.length > 0;
 
-  // ── Pan the calendar forward / backward ──────────────────────────────────
   const pan = (days: number) => dispatch({ type: 'PAN_CALENDAR', days });
 
   return (
@@ -46,13 +44,12 @@ function Toolbar({
           fontSize: 14,
         }}>📊</div>
         <span style={{ color: 'var(--text-inverse)', fontWeight: 700, fontSize: 14, letterSpacing: '-0.01em' }}>
-          DMS Gantt
+          GanttFlow
         </span>
       </div>
 
       <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
 
-      {/* Add actions */}
       <ToolbarButton onClick={onAddProject} icon="＋" label="Swim Lane" accent />
       {hasProjects && (
         <>
@@ -61,7 +58,6 @@ function Toolbar({
         </>
       )}
 
-      {/* Spacer */}
       <div style={{ flex: 1 }} />
 
       {/* Calendar navigation */}
@@ -107,11 +103,9 @@ function Toolbar({
   );
 }
 
-// ─── Small toolbar button components ─────────────────────────────────────────
+// ─── Toolbar Button Components ────────────────────────────────────────────────
 
-function ToolbarButton({
-  onClick, icon, label, accent = false
-}: {
+function ToolbarButton({ onClick, icon, label, accent = false }: {
   onClick: () => void;
   icon: string;
   label: string;
@@ -143,9 +137,7 @@ function ToolbarButton({
   );
 }
 
-function ToolbarIconBtn({
-  onClick, title, children, label
-}: {
+function ToolbarIconBtn({ onClick, title, children, label }: {
   onClick: () => void;
   title: string;
   children?: React.ReactNode;
@@ -178,10 +170,43 @@ function ToolbarIconBtn({
 
 type ModalType = 'project' | 'task' | 'milestone' | null;
 
-// ─── Root App ─────────────────────────────────────────────────────────────────
+// ─── AppInner ─────────────────────────────────────────────────────────────────
 
 function AppInner() {
   const [modal, setModal] = useState<ModalType>(null);
+
+  // `loading` is true until both Firestore onSnapshot listeners have fired
+  // their first snapshot. We block the chart from rendering until data is ready
+  // to avoid a flash of empty state on every page load.
+  const { loading } = useGantt();
+
+  if (loading) {
+    return (
+      <div style={{
+        height: '100vh',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: 'var(--bg-app)',
+        gap: 16,
+      }}>
+        {/* CSS-only spinner — defined inline to avoid a separate stylesheet */}
+        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+        <div style={{
+          width: 36,
+          height: 36,
+          border: '3px solid var(--border)',
+          borderTopColor: 'var(--accent)',
+          borderRadius: '50%',
+          animation: 'spin 0.7s linear infinite',
+        }} />
+        <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>
+          Loading your Gantt chart…
+        </span>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', overflow: 'hidden' }}>
@@ -191,18 +216,18 @@ function AppInner() {
         onAddMilestone={() => setModal('milestone')}
       />
 
-      {/* Chart fills remaining height */}
       <div style={{ flex: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
         <GanttChart />
       </div>
 
-      {/* Modals */}
       {modal === 'project'   && <AddProjectModal onClose={() => setModal(null)} />}
       {modal === 'task'      && <AddItemModal itemType="task"      onClose={() => setModal(null)} />}
       {modal === 'milestone' && <AddItemModal itemType="milestone" onClose={() => setModal(null)} />}
     </div>
   );
 }
+
+// ─── Root ─────────────────────────────────────────────────────────────────────
 
 export default function App() {
   return (

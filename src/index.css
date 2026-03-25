@@ -167,3 +167,31 @@ input {
 }
 .color-swatch:hover   { transform: scale(1.15); }
 .color-swatch.selected { border-color: var(--text-primary); box-shadow: 0 0 0 2px white inset; }
+
+/* ─── Calendar Scrollbar ──────────────────────────────────────────── */
+/* Style the native horizontal scrollbar on the gantt chart container */
+.gantt-scroll::-webkit-scrollbar {
+  height: 8px;
+}
+.gantt-scroll::-webkit-scrollbar-track {
+  background: var(--border);
+  border-radius: 4px;
+  margin: 0 4px;
+}
+.gantt-scroll::-webkit-scrollbar-thumb {
+  background: var(--text-secondary);
+  border-radius: 4px;
+  opacity: 0.6;
+}
+.gantt-scroll::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+/* Firefox */
+.gantt-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: var(--text-secondary) var(--border);
+}
+/* Hide vertical scrollbar — only horizontal scroll is intentional here */
+.gantt-scroll::-webkit-scrollbar:vertical {
+  width: 0;
+}

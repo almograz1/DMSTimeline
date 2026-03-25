@@ -73,7 +73,7 @@ export function getMonthFullName(date: Date): string {
 /** True if the date falls on a Saturday or Sunday */
 export function isWeekend(date: Date): boolean {
   const d = date.getDay();
-  return d === 0 || d === 6;
+  return d === 5 || d === 6; // Friday=5, Saturday=6
 }
 
 /**
@@ -94,11 +94,15 @@ export function buildWeeklyColumns(calStart: Date, weekCount: number): Date[] {
 }
 
 /**
- * Compute the default calendar window: 4 weeks before today through 16 weeks after.
- * Returns { startDate, totalDays }.
+ * Compute the default calendar window: 2 months before today through 22 months after.
+ * 24 months total ≈ 730 days. Starts on the Monday of the week 2 months back.
  */
 export function defaultCalendarWindow(): { startDate: Date; totalDays: number } {
   const today = new Date();
-  const startDate = addDays(getMondayOfWeek(today), -28); // 4 weeks back
-  return { startDate, totalDays: 28 + 7 * 16 }; // 20 weeks total
+  const twoMonthsBack = new Date(today.getFullYear(), today.getMonth() - 2, 1);
+  const startDate = getMondayOfWeek(twoMonthsBack);
+  // 24 months × ~30.44 days = 730 days
+  const endDate = new Date(today.getFullYear(), today.getMonth() + 22 + 1, 1);
+  const totalDays = Math.ceil((endDate.getTime() - startDate.getTime()) / (1000 * 60 * 60 * 24));
+  return { startDate, totalDays };
 }
