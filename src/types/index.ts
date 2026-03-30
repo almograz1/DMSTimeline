@@ -40,6 +40,8 @@ export interface GanttTask {
   endDate: string | null;
   order: number;
   description?: string;
+  /** Optional override color — if set, overrides the project color for this task */
+  color?: string;
 }
 
 export interface GanttMilestone {
@@ -53,6 +55,8 @@ export interface GanttMilestone {
   date: string | null;
   order: number;
   description?: string;
+  /** Optional override color — if set, overrides the project color for this milestone */
+  color?: string;
 }
 
 export type GanttItem = GanttTask | GanttMilestone;
@@ -62,3 +66,13 @@ export type CalendarRow =
   | { kind: 'subheader';  subgroup: Subgroup; project: Project }
   | { kind: 'item';       item: GanttTask;              project: Project; subgroup?: Subgroup }
   | { kind: 'milestones'; milestones: GanttMilestone[]; project: Project; subgroup?: Subgroup };
+
+/** A vacation period blocks task/milestone placement across all swimlanes */
+export interface VacationPeriod {
+  id: string;
+  userId: string;
+  timelineId: string;
+  name: string;
+  startDate: string; // ISO 'YYYY-MM-DD'
+  endDate: string;   // ISO 'YYYY-MM-DD'
+}

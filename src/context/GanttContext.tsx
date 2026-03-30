@@ -8,12 +8,13 @@ import {
   writeBatch, query, where,
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import type { Project, Subgroup, GanttItem, GanttTask, GanttMilestone, ViewMode } from '../types';
+import type { Project, Subgroup, GanttItem, GanttTask, GanttMilestone, ViewMode, VacationPeriod } from '../types';
 import { formatDate, defaultCalendarWindow, addDays, parseDate } from '../utils/dateUtils';
 import { useAuth } from '../auth/AuthContext';
 import { useTimeline } from '../auth/TimelineContext';
 
 const PROJECTS_COL  = 'projects';
+const VACATIONS_COL = 'vacations';
 const SUBGROUPS_COL = 'subgroups';
 const ITEMS_COL     = 'items';
 
@@ -34,6 +35,7 @@ interface GanttState {
   projects: Project[];
   subgroups: Subgroup[];
   items: GanttItem[];
+  vacations: VacationPeriod[];
   viewMode: ViewMode;
   calendarStart: string;
   calendarDays: number;
@@ -56,6 +58,9 @@ type Action =
   | { type: 'ADD_ITEM';                item: GanttItem }
   | { type: 'UPDATE_ITEM';             itemId: string; patch: Partial<GanttTask> | Partial<GanttMilestone> }
   | { type: 'DELETE_ITEM';             itemId: string }
+  | { type: 'LOAD_VACATIONS';          vacations: VacationPeriod[] }
+  | { type: 'ADD_VACATION';            vacation: VacationPeriod }
+  | { type: 'DELETE_VACATION';         vacationId: string }
   | { type: 'SET_VIEW_MODE';           viewMode: ViewMode }
   | { type: 'PAN_CALENDAR';            days: number }
   | { type: 'GO_TO_TODAY' };
@@ -128,6 +133,12 @@ function reducer(state: GanttState, action: Action): GanttState {
       };
     case 'DELETE_ITEM':
       return { ...state, items: state.items.filter(i => i.id !== action.itemId) };
+    case 'LOAD_VACATIONS':
+      return { ...state, vacations: [...action.vacations].sort((a, b) => a.startDate.localeCompare(b.startDate)) };
+    case 'ADD_VACATION':
+      return { ...state, vacations: [...state.vacations, action.vacation] };
+    case 'DELETE_VACATION':
+      return { ...state, vacations: state.vacations.filter(v => v.id !== action.vacationId) };
     case 'SET_VIEW_MODE':
       return { ...state, viewMode: action.viewMode };
     case 'PAN_CALENDAR': {
@@ -145,7 +156,7 @@ function reducer(state: GanttState, action: Action): GanttState {
 function buildInitialState(): GanttState {
   const { startDate, totalDays } = defaultCalendarWindow();
   return {
-    projects: [], subgroups: [], items: [],
+    projects: [], subgroups: [], items: [], vacations: [],
     viewMode: 'weekly',
     calendarStart: formatDate(startDate),
     calendarDays: totalDays,
@@ -212,8 +223,13 @@ export function GanttProvider({ children }: { children: React.ReactNode }) {
       snapshot => { dispatch({ type: 'LOAD_ITEMS', items: snapshot.docs.map(d => d.data() as GanttItem) }); markLoaded(); },
       err => { console.error('items:', err); markLoaded(); }
     );
+    const unsubVacations = onSnapshot(
+      query(collection(db, VACATIONS_COL), where('userId', '==', uid), where('timelineId', '==', tid)),
+      snapshot => { dispatch({ type: 'LOAD_VACATIONS', vacations: snapshot.docs.map(d => d.data() as VacationPeriod) }); },
+      err => { console.error('vacations:', err); }
+    );
 
-    return () => { unsubProjects(); unsubSubgroups(); unsubItems(); };
+    return () => { unsubProjects(); unsubSubgroups(); unsubItems(); unsubVacations(); };
   }, [user, activeTimeline]);
 
   // ── Local → Firestore ────────────────────────────────────────────────────────
@@ -237,6 +253,9 @@ export function GanttProvider({ children }: { children: React.ReactNode }) {
     if (action.type === 'ADD_ITEM') {
       const projectItems = state.items.filter(i => i.projectId === (action as { item: GanttItem }).item.projectId);
       action = { ...action, item: { ...(action as { item: GanttItem }).item, userId: uid, timelineId: tid, order: nextOrder(projectItems) } };
+    }
+    if (action.type === 'ADD_VACATION') {
+      action = { ...action, vacation: { ...(action as { vacation: import('../types').VacationPeriod }).vacation, userId: uid, timelineId: tid } };
     }
 
     lastActionRef.current = action;
@@ -308,6 +327,12 @@ async function syncToFirestore(action: Action, state: GanttState): Promise<void>
     case 'TOGGLE_SUBGROUP_COLLAPSE':
       await setDoc(doc(db, SUBGROUPS_COL, action.subgroupId),
         { collapsed: state.subgroups.find(s => s.id === action.subgroupId)?.collapsed }, { merge: true });
+      break;
+    case 'ADD_VACATION':
+      await setDoc(doc(db, VACATIONS_COL, action.vacation.id), action.vacation);
+      break;
+    case 'DELETE_VACATION':
+      await deleteDoc(doc(db, VACATIONS_COL, action.vacationId));
       break;
     case 'ADD_ITEM':
       await setDoc(doc(db, ITEMS_COL, action.item.id), action.item);

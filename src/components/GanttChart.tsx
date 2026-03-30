@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useGantt } from '../context/GanttContext';
-import type { CalendarRow, GanttTask, GanttMilestone, Project, Subgroup } from '../types';
+import type { CalendarRow, GanttTask, GanttMilestone, Project, Subgroup, VacationPeriod } from '../types';
 import {
   parseDate, formatDate, addDays, dayDiff,
   buildDailyColumns, buildWeeklyColumns,
@@ -224,7 +224,7 @@ function DropIndicator({ color = 'var(--accent)' }: { color?: string }) {
 
 export default function GanttChart() {
   const { state, dispatch } = useGantt();
-  const { projects, subgroups, items, viewMode, calendarStart, calendarDays } = state;
+  const { projects, subgroups, items, vacations, viewMode, calendarStart, calendarDays } = state;
 
   // ── Zoom — must be declared before ppd/colWidth which depend on zoomScale ──
   const ZOOM_LEVELS  = [0.8, 1.0, 1.2] as const;
@@ -474,20 +474,43 @@ export default function GanttChart() {
   const [detailPanel, setDetailPanel] = useState<{
     item: GanttTask | GanttMilestone;
     color: string;
+    projectColor: string;
     anchorRect: DOMRect;
   } | null>(null);
 
-  const openDetail = useCallback((item: GanttTask | GanttMilestone, color: string, e: React.MouseEvent) => {
+  const openDetail = useCallback((item: GanttTask | GanttMilestone, projectColor: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    // Use a small DOMRect centred on the click point so the panel appears at the cursor
     const clickRect = new DOMRect(e.clientX, e.clientY, 0, 0);
-    setDetailPanel({ item, color, anchorRect: clickRect });
+    const effectiveColor = (item as GanttTask | GanttMilestone & { color?: string }).color ?? projectColor;
+    setDetailPanel({ item, color: effectiveColor, projectColor, anchorRect: clickRect });
   }, []);
 
   const closeDetail = useCallback(() => setDetailPanel(null), []);
 
+  // ── Vacation context menu ─────────────────────────────────────────────────────
+  const [vacMenu, setVacMenu] = useState<{ x: number; y: number; date: string } | null>(null);
+  const [vacForm, setVacForm] = useState<{ startDate: string; endDate: string; name: string } | null>(null);
+  // quickAdd: inline form spawned from right-click for adding a task or milestone
+  const [quickAdd, setQuickAdd] = useState<{
+    type: 'task' | 'milestone';
+    date: string;       // pre-filled start/milestone date
+    x: number; y: number;
+    name: string;
+    projectId: string;
+  } | null>(null);
+
+  /** Returns true if the given ISO date falls within any vacation period */
+  const isVacationDate = useCallback((date: string): boolean => {
+    return vacations.some(v => date >= v.startDate && date <= v.endDate);
+  }, [vacations]);
+
   const saveDetail = useCallback((itemId: string, description: string) => {
     dispatch({ type: 'UPDATE_ITEM', itemId, patch: { description } });
+  }, [dispatch]);
+
+  const saveDetailColor = useCallback((itemId: string, color: string | null) => {
+    // null means "reset to project color" — store as undefined/null to remove override
+    dispatch({ type: 'UPDATE_ITEM', itemId, patch: { color: color ?? undefined } });
   }, [dispatch]);
 
   // ── Click handlers ────────────────────────────────────────────────────────────
@@ -496,6 +519,7 @@ export default function GanttChart() {
     if (calDragStateRef.current || calDragPreviewRef.current) return;
     const dayOffset   = Math.floor((e.clientX - rowEl.getBoundingClientRect().left) / ppd);
     const clickedDate = formatDate(addDays(calStartDate, dayOffset));
+    if (isVacationDate(clickedDate)) return; // blocked by vacation
     if (!task.startDate) {
       dispatch({ type: 'UPDATE_ITEM', itemId: task.id, patch: { startDate: clickedDate, endDate: null } });
     } else if (!task.endDate) {
@@ -510,6 +534,7 @@ export default function GanttChart() {
     if (!firstUnplaced) return;
     const dayOffset   = Math.floor((e.clientX - rowEl.getBoundingClientRect().left) / ppd);
     const clickedDate = formatDate(addDays(calStartDate, dayOffset));
+    if (isVacationDate(clickedDate)) return; // blocked by vacation
     dispatch({ type: 'UPDATE_ITEM', itemId: firstUnplaced.id, patch: { date: clickedDate } });
   }, [calStartDate, ppd, dispatch]);
 
@@ -601,12 +626,59 @@ export default function GanttChart() {
 
         {/* ── CALENDAR AREA ────────────────────────────────────────────────── */}
         <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
-          <CalendarHeader columns={columns} viewMode={viewMode} colWidth={colWidth} todayDate={today} />
+          <div
+            onContextMenu={e => {
+              e.preventDefault();
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              const dayOffset = Math.floor((e.clientX - rect.left) / ppd);
+              const date = formatDate(addDays(calStartDate, dayOffset));
+              setVacMenu({ x: e.clientX, y: e.clientY, date });
+            }}
+          >
+            <CalendarHeader columns={columns} viewMode={viewMode} colWidth={colWidth} todayDate={today} />
+          </div>
 
-          <div style={{ position: 'relative', flex: 1 }}>
+          <div
+          style={{ position: 'relative', flex: 1 }}
+          onContextMenu={e => {
+            e.preventDefault();
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            const dayOffset = Math.floor((e.clientX - rect.left) / ppd);
+            const date = formatDate(addDays(calStartDate, dayOffset));
+            setVacMenu({ x: e.clientX, y: e.clientY, date });
+          }}
+        >
             {todayVisible && (
               <div style={{ position: 'absolute', left: todayOffset, top: 0, bottom: 0, width: 2, background: 'var(--accent)', opacity: 0.5, zIndex: 3, pointerEvents: 'none' }} />
             )}
+
+            {/* ── Vacation overlays ── */}
+            {vacations.map(v => {
+              const left  = dayDiff(calStartDate, parseDate(v.startDate)) * ppd;
+              const right = dayDiff(calStartDate, parseDate(v.endDate))   * ppd + ppd;
+              const width = right - left;
+              if (width <= 0) return null;
+              return (
+                <div
+                  key={v.id}
+                  title={v.name + ': ' + v.startDate + ' to ' + v.endDate + ' (click to delete)'}
+                  onClick={() => { if (window.confirm('Delete vacation: ' + v.name)) dispatch({ type: 'DELETE_VACATION', vacationId: v.id }); }}
+                  style={{
+                    position: 'absolute', left, top: 0, bottom: 0, width,
+                    background: 'repeating-linear-gradient(45deg, rgba(239,68,68,0.07) 0px, rgba(239,68,68,0.07) 8px, rgba(239,68,68,0.13) 8px, rgba(239,68,68,0.13) 16px)',
+                    borderLeft:  '2px solid rgba(239,68,68,0.4)',
+                    borderRight: '2px solid rgba(239,68,68,0.4)',
+                    zIndex: 4, cursor: 'pointer', pointerEvents: 'auto',
+                  }}
+                >
+                  <div style={{ position: 'sticky', left: 0, padding: '4px 6px', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: 'rgba(239,68,68,0.8)', whiteSpace: 'nowrap', background: 'rgba(255,255,255,0.85)', padding: '2px 6px', borderRadius: 4 }}>
+                      🏖 {v.name}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
 
             {rows.map(row => {
               if (row.kind === 'header') {
@@ -630,7 +702,7 @@ export default function GanttChart() {
                     onHover={setHoveredKey}
                     onRowClick={handleTaskRowClick}
                     onDragStart={(e, kind) => startCalDrag(e, kind, task)}
-                    onBarClick={e => openDetail(task, row.project.color, e)}
+                    onBarClick={e => openDetail(task, task.color ?? row.project.color, e)}
                     today={today}
                   />
                 );
@@ -661,7 +733,7 @@ export default function GanttChart() {
                   onHover={id => setHoveredKey(id)}
                   onRowClick={handleMilestonesRowClick}
                   onMilestoneDragStart={(e, m) => startCalDrag(e, 'move-milestone', m)}
-                  onMilestoneLabelClick={(e, m) => openDetail(m, row.project.color, e)}
+                  onMilestoneLabelClick={(e, m) => openDetail(m, m.color ?? row.project.color, e)}
                   dragPreview={calDragPreview}
                   today={today}
                 />
@@ -705,14 +777,216 @@ export default function GanttChart() {
       >＋</button>
     </div>
 
+    {/* Right-click context menu */}
+    {vacMenu && (
+      <>
+        <div style={{ position: 'fixed', inset: 0, zIndex: 199 }} onClick={() => setVacMenu(null)} />
+        <div style={{
+          position: 'fixed', left: Math.min(vacMenu.x, window.innerWidth - 220), top: Math.min(vacMenu.y, window.innerHeight - 200),
+          zIndex: 200, background: 'var(--bg-surface)', border: '1px solid var(--border)',
+          borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
+          padding: 4, minWidth: 200,
+        }}>
+          {/* Date label */}
+          <div style={{ padding: '4px 12px 6px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', marginBottom: 4 }}>
+            📅 {vacMenu.date}
+          </div>
+
+          {/* Add Task */}
+          <CtxMenuItem icon="▬" label="Add Task here" onClick={() => {
+            setQuickAdd({ type: 'task', date: vacMenu.date, x: vacMenu.x, y: vacMenu.y, name: '', projectId: projects[0]?.id ?? '' });
+            setVacMenu(null);
+          }} />
+
+          {/* Add Milestone */}
+          <CtxMenuItem icon="◆" label="Add Milestone here" onClick={() => {
+            setQuickAdd({ type: 'milestone', date: vacMenu.date, x: vacMenu.x, y: vacMenu.y, name: '', projectId: projects[0]?.id ?? '' });
+            setVacMenu(null);
+          }} />
+
+          <div style={{ height: 1, background: 'var(--border)', margin: '4px 0' }} />
+
+          {/* Add Vacation */}
+          <CtxMenuItem icon="🏖" label="Add vacation period" onClick={() => {
+            setVacForm({ startDate: vacMenu.date, endDate: vacMenu.date, name: '' });
+            setVacMenu(null);
+          }} />
+        </div>
+      </>
+    )}
+
+    {/* Quick-add task/milestone inline modal */}
+    {quickAdd && (
+      <div style={{ position: 'fixed', inset: 0, zIndex: 300 }} onClick={() => setQuickAdd(null)}>
+        <div
+          onClick={e => e.stopPropagation()}
+          style={{
+            position: 'fixed',
+            left: Math.min(quickAdd.x, window.innerWidth - 300),
+            top: Math.min(quickAdd.y, window.innerHeight - 240),
+            width: 280,
+            background: 'var(--bg-surface)',
+            border: '1.5px solid var(--accent)',
+            borderRadius: 10,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+            padding: 16,
+            display: 'flex', flexDirection: 'column', gap: 12,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ fontSize: 14 }}>{quickAdd.type === 'task' ? '▬' : '◆'}</span>
+            <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)' }}>
+              Add {quickAdd.type === 'task' ? 'Task' : 'Milestone'}
+            </span>
+            <span style={{ marginLeft: 'auto', fontSize: 11, color: 'var(--text-muted)' }}>
+              {quickAdd.date}
+            </span>
+          </div>
+
+          {/* Name */}
+          <input
+            autoFocus
+            className="form-input"
+            placeholder={quickAdd.type === 'task' ? 'Task name…' : 'Milestone name…'}
+            value={quickAdd.name}
+            onChange={e => setQuickAdd(q => q && ({ ...q, name: e.target.value }))}
+            onKeyDown={e => {
+              if (e.key === 'Escape') { setQuickAdd(null); return; }
+              if (e.key === 'Enter') {
+                const name = quickAdd.name.trim();
+                if (!name || !quickAdd.projectId) return;
+                if (quickAdd.type === 'task') {
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', projectId: quickAdd.projectId, name, startDate: quickAdd.date, endDate: null, order: 0 } });
+                } else {
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'milestone', projectId: quickAdd.projectId, name, date: quickAdd.date, order: 0 } });
+                }
+                setQuickAdd(null);
+              }
+            }}
+            style={{ width: '100%', boxSizing: 'border-box' }}
+          />
+
+          {/* Project selector */}
+          {projects.length > 1 && (
+            <select
+              className="form-input"
+              value={quickAdd.projectId}
+              onChange={e => setQuickAdd(q => q && ({ ...q, projectId: e.target.value }))}
+              style={{ appearance: 'auto', width: '100%', boxSizing: 'border-box' }}
+            >
+              {projects.map(p => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
+          )}
+
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button className="btn-ghost" style={{ flex: 1 }} onClick={() => setQuickAdd(null)}>Cancel</button>
+            <button
+              className="btn-primary" style={{ flex: 2, opacity: quickAdd.name.trim() ? 1 : 0.5 }}
+              disabled={!quickAdd.name.trim() || !quickAdd.projectId}
+              onClick={() => {
+                const name = quickAdd.name.trim();
+                if (!name || !quickAdd.projectId) return;
+                if (quickAdd.type === 'task') {
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', projectId: quickAdd.projectId, name, startDate: quickAdd.date, endDate: null, order: 0 } });
+                } else {
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'milestone', projectId: quickAdd.projectId, name, date: quickAdd.date, order: 0 } });
+                }
+                setQuickAdd(null);
+              }}
+            >
+              Add {quickAdd.type === 'task' ? 'Task' : 'Milestone'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Vacation form modal */}
+    {vacForm && (
+      <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.3)', zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        onClick={() => setVacForm(null)}>
+        <div style={{ background: 'var(--bg-surface)', borderRadius: 12, padding: 24, width: 340, boxShadow: '0 8px 32px rgba(0,0,0,0.2)' }}
+          onClick={e => e.stopPropagation()}>
+          <h3 style={{ fontSize: 15, fontWeight: 700, marginBottom: 18, display: 'flex', alignItems: 'center', gap: 8 }}>
+            🏖 Add Vacation Period
+          </h3>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <div>
+              <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 5 }}>Name</label>
+              <input
+                autoFocus
+                className="form-input"
+                placeholder="e.g. Summer break, Public holiday…"
+                value={vacForm.name}
+                onChange={e => setVacForm(f => f && ({ ...f, name: e.target.value }))}
+                style={{ width: '100%', boxSizing: 'border-box' }}
+              />
+            </div>
+            <div style={{ display: 'flex', gap: 10 }}>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 5 }}>Start date</label>
+                <input
+                  type="date" className="form-input"
+                  value={vacForm.startDate}
+                  onChange={e => setVacForm(f => f && ({ ...f, startDate: e.target.value }))}
+                  style={{ width: '100%', boxSizing: 'border-box' }}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <label style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 5 }}>End date</label>
+                <input
+                  type="date" className="form-input"
+                  value={vacForm.endDate}
+                  min={vacForm.startDate}
+                  onChange={e => setVacForm(f => f && ({ ...f, endDate: e.target.value }))}
+                  style={{ width: '100%', boxSizing: 'border-box' }}
+                />
+              </div>
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 8, marginTop: 20, justifyContent: 'flex-end' }}>
+            <button className="btn-ghost" onClick={() => setVacForm(null)}>Cancel</button>
+            <button
+              className="btn-primary"
+              disabled={!vacForm.name.trim() || !vacForm.startDate || !vacForm.endDate}
+              style={{ opacity: vacForm.name.trim() ? 1 : 0.5 }}
+              onClick={() => {
+                if (!vacForm.name.trim()) return;
+                dispatch({
+                  type: 'ADD_VACATION',
+                  vacation: {
+                    id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`,
+                    userId: '',   // stamped by GanttContext dispatchWithSync
+                    timelineId: '',
+                    name: vacForm.name.trim(),
+                    startDate: vacForm.startDate,
+                    endDate: vacForm.endDate <= vacForm.startDate ? vacForm.startDate : vacForm.endDate,
+                  },
+                });
+                setVacForm(null);
+              }}
+            >
+              Add Vacation
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
     {/* Detail panel — floats above everything */}
     {detailPanel && (
       <DetailPanel
         item={detailPanel.item}
         color={detailPanel.color}
+        projectColor={detailPanel.projectColor}
         anchorRect={detailPanel.anchorRect}
         onClose={closeDetail}
         onSave={desc => saveDetail(detailPanel.item.id, desc)}
+        onSaveColor={color => saveDetailColor(detailPanel.item.id, color)}
       />
     )}
     </>
@@ -781,7 +1055,7 @@ const LeftPanelTaskRow = React.forwardRef<HTMLDivElement, {
       onMouseLeave={() => onHover(null)}
     >
       <GripHandle onMouseDown={onGripMouseDown} />
-      <div style={{ width: 12, height: 5, background: project.color, borderRadius: 2, flexShrink: 0 }} />
+      <div style={{ width: 12, height: 5, background: (item as any).color ?? project.color, borderRadius: 2, flexShrink: 0 }} />
       <span style={{ flex: 1, fontSize: 12, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {item.name}
       </span>
@@ -878,7 +1152,7 @@ function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, c
         </div>
       )}
       <div style={{ position: 'absolute', inset: 0, zIndex: 3 }}>
-        <TaskBar task={task} color={project.color} calStart={calStartDate} ppd={ppd} rowH={rowH} preview={preview} onDragStart={onDragStart} onBarClick={onBarClick} />
+        <TaskBar task={task} color={task.color ?? project.color} calStart={calStartDate} ppd={ppd} rowH={rowH} preview={preview} onDragStart={onDragStart} onBarClick={onBarClick} />
       </div>
     </div>
   );
@@ -919,7 +1193,7 @@ function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStart
       <div style={{ position: 'absolute', inset: 0, zIndex: 3 }}>
         {milestones.filter(m => m.date !== null).map(m => (
           <MilestoneWithLabel
-            key={m.id} milestone={m} color={project.color} calStart={calStartDate} ppd={ppd}
+            key={m.id} milestone={m} color={m.color ?? project.color} calStart={calStartDate} ppd={ppd}
             previewDate={dragPreview?.itemId === m.id ? dragPreview.date : undefined}
             onDragStart={e => onMilestoneDragStart(e, m)}
             onLabelClick={e => onMilestoneLabelClick(e, m)}
@@ -933,14 +1207,24 @@ function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStart
 // ─── Detail Panel ─────────────────────────────────────────────────────────────
 // Floats near the clicked item. Saves description to Firestore on close.
 
-export function DetailPanel({ item, color, anchorRect, onClose, onSave }: {
+// Swatches available in the color picker inside the detail panel
+const ITEM_COLORS = [
+  null, // null = use project color (default)
+  '#ef4444','#f97316','#eab308','#22c55e','#14b8a6',
+  '#3b82f6','#8b5cf6','#ec4899','#6b7280','#1e293b',
+];
+
+export function DetailPanel({ item, color, projectColor, anchorRect, onClose, onSave, onSaveColor }: {
   item: GanttTask | GanttMilestone;
-  color: string;
+  color: string;          // effective color (item.color ?? project.color)
+  projectColor: string;   // always the project color (for "reset to default" swatch)
   anchorRect: DOMRect;
   onClose: () => void;
   onSave: (description: string) => void;
+  onSaveColor: (color: string | null) => void;
 }) {
-  const [desc, setDesc] = useState(item.description ?? '');
+  const [desc, setDesc]           = useState(item.description ?? '');
+  const [activeColor, setActiveColor] = useState<string | null>(item.color ?? null);
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Position the panel below the clicked element, keeping it inside the viewport
@@ -1000,7 +1284,7 @@ export function DetailPanel({ item, color, anchorRect, onClose, onSave }: {
     >
       {/* Header */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
-        <div style={{ width: 10, height: 10, borderRadius: isMilestone ? 2 : 3, background: color, transform: isMilestone ? 'rotate(45deg)' : 'none', flexShrink: 0, marginTop: 3 }} />
+        <div style={{ width: 10, height: 10, borderRadius: isMilestone ? 2 : 3, background: activeColor ?? projectColor, transform: isMilestone ? 'rotate(45deg)' : 'none', flexShrink: 0, marginTop: 3 }} />
         <div style={{ flex: 1 }}>
           <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.3 }}>{item.name}</div>
           <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>{dateLabel}</div>
@@ -1013,6 +1297,40 @@ export function DetailPanel({ item, color, anchorRect, onClose, onSave }: {
 
       {/* Divider */}
       <div style={{ height: 1, background: 'var(--border)' }} />
+
+      {/* Color picker */}
+      <div>
+        <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 8 }}>
+          Color
+        </label>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {ITEM_COLORS.map((c, i) => {
+            const swatchColor = c ?? projectColor;
+            const isSelected  = c === activeColor;
+            return (
+              <button
+                key={i}
+                title={c === null ? 'Use project color (default)' : c}
+                onClick={() => setActiveColor(c)}
+                style={{
+                  width: 22, height: 22, borderRadius: 5,
+                  background: swatchColor,
+                  border: isSelected ? '2.5px solid var(--text-primary)' : '2px solid transparent',
+                  boxShadow: isSelected ? '0 0 0 1px #fff inset' : 'none',
+                  position: 'relative', flexShrink: 0,
+                  transition: 'transform 0.1s',
+                  transform: isSelected ? 'scale(1.15)' : 'scale(1)',
+                }}
+              >
+                {/* "Default" swatch gets a small reset indicator */}
+                {c === null && (
+                  <span style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, color: '#fff', fontWeight: 700, textShadow: '0 1px 2px rgba(0,0,0,0.4)' }}>↺</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Description */}
       <div>
@@ -1039,27 +1357,48 @@ export function DetailPanel({ item, color, anchorRect, onClose, onSave }: {
             boxSizing: 'border-box',
             fontFamily: 'inherit',
           }}
-          onFocus={e => (e.target.style.borderColor = color)}
+          onFocus={e => (e.target.style.borderColor = activeColor ?? projectColor)}
           onBlur={e => (e.target.style.borderColor = 'var(--border)')}
         />
       </div>
 
       {/* Save button */}
       <button
-        onClick={() => { onSave(desc); onClose(); }}
+        onClick={() => { onSave(desc); onSaveColor(activeColor); onClose(); }}
         style={{
-          background: color,
+          background: activeColor ?? projectColor,
           color: '#fff',
           borderRadius: 6,
           padding: '6px 0',
           fontSize: 12,
           fontWeight: 700,
           width: '100%',
+          transition: 'background 0.15s',
         }}
       >
         Save
       </button>
     </div>
+  );
+}
+
+// ─── Context Menu Item ───────────────────────────────────────────────────────
+
+function CtxMenuItem({ icon, label, onClick }: { icon: string; label: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{
+        width: '100%', padding: '7px 12px', borderRadius: 6, textAlign: 'left',
+        fontSize: 13, display: 'flex', alignItems: 'center', gap: 8,
+        color: 'var(--text-primary)', background: 'transparent', transition: 'background 0.1s',
+      }}
+      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-row-hover)')}
+      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+    >
+      <span style={{ fontSize: 12, width: 16, textAlign: 'center', flexShrink: 0 }}>{icon}</span>
+      {label}
+    </button>
   );
 }
 
