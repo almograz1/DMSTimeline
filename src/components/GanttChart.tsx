@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useGantt } from '../context/GanttContext';
-import type { CalendarRow, GanttTask, GanttMilestone, Project } from '../types';
+import type { CalendarRow, GanttTask, GanttMilestone, Project, Subgroup } from '../types';
 import {
   parseDate, formatDate, addDays, dayDiff,
   buildDailyColumns, buildWeeklyColumns,
@@ -224,12 +224,18 @@ function DropIndicator({ color = 'var(--accent)' }: { color?: string }) {
 
 export default function GanttChart() {
   const { state, dispatch } = useGantt();
-  const { projects, items, viewMode, calendarStart, calendarDays } = state;
+  const { projects, subgroups, items, viewMode, calendarStart, calendarDays } = state;
+
+  // ── Zoom — must be declared before ppd/colWidth which depend on zoomScale ──
+  const ZOOM_LEVELS  = [0.8, 1.0, 1.2] as const;
+  const ZOOM_LABELS  = ['80%', '100%', '120%'] as const;
+  const [zoomIdx, setZoomIdx] = useState(1); // default = 100%
+  const zoomScale = ZOOM_LEVELS[zoomIdx];
 
   const today        = formatDate(new Date());
   const calStartDate = parseDate(calendarStart);
-  const ppd          = pxPerDay(viewMode);
-  const colWidth     = viewMode === 'daily' ? DAILY_COL_W : WEEKLY_COL_W;
+  const ppd          = pxPerDay(viewMode) * zoomScale;
+  const colWidth     = (viewMode === 'daily' ? DAILY_COL_W : WEEKLY_COL_W) * zoomScale;
   const numCols      = viewMode === 'daily' ? calendarDays : Math.ceil(calendarDays / 7);
 
   // ── Calendar drag (move/resize bars) ─────────────────────────────────────────
@@ -422,17 +428,39 @@ export default function GanttChart() {
 
   const rows: CalendarRow[] = useMemo(() => {
     const result: CalendarRow[] = [];
+
+    function pushItems(
+      projectItems: typeof items,
+      project: Project,
+      subgroup?: Subgroup
+    ) {
+      const tasks      = projectItems.filter(i => i.type === 'task')      as GanttTask[];
+      const milestones = projectItems.filter(i => i.type === 'milestone') as GanttMilestone[];
+      for (const task of tasks) result.push({ kind: 'item', item: task, project, subgroup });
+      if (milestones.length > 0) result.push({ kind: 'milestones', milestones, project, subgroup });
+    }
+
     for (const project of projects) {
       result.push({ kind: 'header', project });
-      if (!project.collapsed) {
-        const tasks      = items.filter(i => i.projectId === project.id && i.type === 'task')      as GanttTask[];
-        const milestones = items.filter(i => i.projectId === project.id && i.type === 'milestone') as GanttMilestone[];
-        for (const task of tasks) result.push({ kind: 'item', item: task, project });
-        if (milestones.length > 0) result.push({ kind: 'milestones', milestones, project });
+      if (project.collapsed) continue;
+
+      const projectSubgroups = subgroups.filter(s => s.projectId === project.id);
+
+      // Top-level items (no subgroup)
+      const topItems = items.filter(i => i.projectId === project.id && !i.subgroupId);
+      pushItems(topItems, project);
+
+      // Subgroup sections
+      for (const sg of projectSubgroups) {
+        result.push({ kind: 'subheader', subgroup: sg, project });
+        if (!sg.collapsed) {
+          const sgItems = items.filter(i => i.projectId === project.id && i.subgroupId === sg.id);
+          pushItems(sgItems, project, sg);
+        }
       }
     }
     return result;
-  }, [projects, items]);
+  }, [projects, subgroups, items]);
 
   const columns = useMemo(
     () => viewMode === 'daily' ? buildDailyColumns(calStartDate, numCols) : buildWeeklyColumns(calStartDate, numCols),
@@ -544,12 +572,26 @@ export default function GanttChart() {
               );
             }
 
-            // milestones row — not reorderable (always last in project)
+            if (row.kind === 'subheader') {
+              const key = `sg-${row.subgroup.id}`;
+              return (
+                <LeftPanelSubgroupHeader
+                  key={key}
+                  subgroup={row.subgroup}
+                  project={row.project}
+                  rowH={ROW_H}
+                  onToggle={() => dispatch({ type: 'TOGGLE_SUBGROUP_COLLAPSE', subgroupId: row.subgroup.id })}
+                  onDelete={() => dispatch({ type: 'DELETE_SUBGROUP', subgroupId: row.subgroup.id })}
+                />
+              );
+            }
+
+            // milestones row — not reorderable (always last in project/subgroup)
             return (
               <LeftPanelMilestonesRow
-                key={`ms-${row.project.id}`}
+                key={`ms-${row.project.id}-${row.subgroup?.id ?? 'top'}`}
                 row={row} rowH={MILESTONE_ROW_H}
-                isHovered={hoveredKey === `ms-${row.project.id}`}
+                isHovered={hoveredKey === `ms-${row.project.id}-${row.subgroup?.id ?? 'top'}`}
                 onHover={setHoveredKey}
                 onDeleteMilestone={id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
               />
@@ -594,9 +636,23 @@ export default function GanttChart() {
                 );
               }
 
+              if (row.kind === 'subheader') {
+                return (
+                  <CalendarSubgroupRow
+                    key={`sg-${row.subgroup.id}`}
+                    subgroup={row.subgroup}
+                    project={row.project}
+                    totalWidth={totalCalWidth}
+                    rowH={ROW_H}
+                    columns={columns}
+                    colWidth={colWidth}
+                  />
+                );
+              }
+
               return (
                 <CalendarMilestonesRow
-                  key={`ms-${row.project.id}`}
+                  key={`ms-${row.project.id}-${row.subgroup?.id ?? 'top'}`}
                   milestones={row.milestones} project={row.project}
                   rowH={MILESTONE_ROW_H} totalWidth={totalCalWidth}
                   calStartDate={calStartDate} ppd={ppd}
@@ -622,6 +678,31 @@ export default function GanttChart() {
           </div>
         </div>
       </div>
+    </div>
+
+    {/* Zoom controls — fixed bottom-left of calendar area */}
+    <div style={{
+      position: 'fixed', bottom: 20, left: 'calc(280px + 16px)', zIndex: 60,
+      display: 'flex', alignItems: 'center', gap: 2,
+      background: 'var(--bg-surface)', border: '1px solid var(--border)',
+      borderRadius: 8, padding: '3px 4px',
+      boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+    }}>
+      <button
+        onClick={() => setZoomIdx(i => Math.max(0, i - 1))}
+        disabled={zoomIdx === 0}
+        title="Zoom out"
+        style={{ width: 24, height: 24, borderRadius: 5, fontSize: 16, fontWeight: 700, color: 'var(--text-secondary)', opacity: zoomIdx === 0 ? 0.3 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      >−</button>
+      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', minWidth: 34, textAlign: 'center' }}>
+        {ZOOM_LABELS[zoomIdx]}
+      </span>
+      <button
+        onClick={() => setZoomIdx(i => Math.min(ZOOM_LEVELS.length - 1, i + 1))}
+        disabled={zoomIdx === ZOOM_LEVELS.length - 1}
+        title="Zoom in"
+        style={{ width: 24, height: 24, borderRadius: 5, fontSize: 16, fontWeight: 700, color: 'var(--text-secondary)', opacity: zoomIdx === ZOOM_LEVELS.length - 1 ? 0.3 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+      >＋</button>
     </div>
 
     {/* Detail panel — floats above everything */}
@@ -863,8 +944,8 @@ export function DetailPanel({ item, color, anchorRect, onClose, onSave }: {
   const panelRef = useRef<HTMLDivElement>(null);
 
   // Position the panel below the clicked element, keeping it inside the viewport
-  const PANEL_W = 300;
-  const PANEL_H = 220;
+  const PANEL_W = 420;
+  const PANEL_H = 380;
   // Position the panel at the click point, nudging inward if it would overflow the viewport
   const left = Math.min(anchorRect.left + 12, window.innerWidth  - PANEL_W - 16);
   const top  = anchorRect.top  + PANEL_H > window.innerHeight
@@ -945,7 +1026,7 @@ export function DetailPanel({ item, color, anchorRect, onClose, onSave }: {
           placeholder="Add notes, context, or details…"
           style={{
             width: '100%',
-            height: 160,
+            height: 280,
             resize: 'vertical',
             fontSize: 12,
             color: 'var(--text-primary)',
@@ -978,6 +1059,116 @@ export function DetailPanel({ item, color, anchorRect, onClose, onSave }: {
       >
         Save
       </button>
+    </div>
+  );
+}
+
+// ─── Left Panel: Subgroup Header Row ─────────────────────────────────────────
+
+function LeftPanelSubgroupHeader({ subgroup, project, rowH, onToggle, onDelete }: {
+  subgroup: Subgroup;
+  project: Project;
+  rowH: number;
+  onToggle: () => void;
+  onDelete: () => void;
+}) {
+  const [showDelete, setShowDelete] = useState(false);
+
+  return (
+    <div
+      style={{
+        height: rowH,
+        display: 'flex',
+        alignItems: 'center',
+        paddingLeft: 20,   // indented more than project header
+        paddingRight: 8,
+        gap: 6,
+        // Slightly lighter than the swimlane header to show hierarchy
+        background: project.color + '14',
+        borderBottom: '1px solid var(--border)',
+        borderLeft: `3px solid ${project.color}60`,
+        cursor: 'pointer',
+        userSelect: 'none',
+      }}
+      onMouseEnter={() => setShowDelete(true)}
+      onMouseLeave={() => setShowDelete(false)}
+      onClick={onToggle}
+    >
+      {/* Collapse arrow */}
+      <span style={{
+        fontSize: 8, color: project.color,
+        transform: subgroup.collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
+        transition: 'transform 0.15s', display: 'inline-block', flexShrink: 0,
+      }}>▼</span>
+
+      {/* Subgroup icon */}
+      <span style={{ fontSize: 11, color: project.color, flexShrink: 0 }}>▤</span>
+
+      {/* Name */}
+      <span style={{
+        flex: 1, fontWeight: 600, fontSize: 11,
+        color: 'var(--text-primary)',
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+      }}>
+        {subgroup.name}
+      </span>
+
+      {showDelete && (
+        <button
+          onClick={e => { e.stopPropagation(); onDelete(); }}
+          title="Delete subgroup (items move to top-level)"
+          style={{
+            width: 18, height: 18, borderRadius: 4,
+            background: '#fee2e2', color: '#ef4444',
+            fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+          }}
+        >×</button>
+      )}
+    </div>
+  );
+}
+
+// ─── Calendar: Subgroup Header Row ────────────────────────────────────────────
+
+function CalendarSubgroupRow({ subgroup, project, totalWidth, rowH, columns, colWidth }: {
+  subgroup: Subgroup;
+  project: Project;
+  totalWidth: number;
+  rowH: number;
+  columns: Date[];
+  colWidth: number;
+}) {
+  return (
+    <div style={{
+      height: rowH,
+      width: totalWidth,
+      background: project.color + '14',
+      borderBottom: '1px solid var(--border)',
+      borderLeft: `3px solid ${project.color}60`,
+      display: 'flex',
+      position: 'relative',
+    }}>
+      {columns.map((col, i) => (
+        <div key={i} style={{
+          width: colWidth, height: '100%', flexShrink: 0,
+          borderRight: '1px solid var(--border)',
+          background: isWeekend(col) && colWidth < 50 ? '#f9fafb' : 'transparent',
+        }} />
+      ))}
+      {/* Subtle subgroup label in the calendar */}
+      <div style={{
+        position: 'absolute', left: 8, top: 0, bottom: 0,
+        display: 'flex', alignItems: 'center',
+        pointerEvents: 'none', zIndex: 2,
+      }}>
+        <span style={{
+          fontSize: 10, fontWeight: 600,
+          color: project.color, opacity: 0.6,
+          whiteSpace: 'nowrap',
+        }}>
+          {subgroup.name}
+        </span>
+      </div>
     </div>
   );
 }

@@ -3,18 +3,23 @@ import { useGantt } from '../context/GanttContext';
 import type { Project } from '../types';
 
 interface Props {
-  /** If provided, the project selector is pre-filled and locked */
   defaultProjectId?: string;
-  /** Whether we're adding a 'task' or 'milestone' */
   itemType: 'task' | 'milestone';
   onClose: () => void;
 }
 
 export default function AddItemModal({ defaultProjectId, itemType, onClose }: Props) {
   const { state, dispatch, genId } = useGantt();
-  const [name, setName] = useState('');
+  const [name, setName]           = useState('');
   const [projectId, setProjectId] = useState(defaultProjectId ?? state.projects[0]?.id ?? '');
+  const [subgroupId, setSubgroupId] = useState<string>('');
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Subgroups that belong to the currently selected project
+  const availableSubgroups = state.subgroups.filter(s => s.projectId === projectId);
+
+  // Reset subgroup selection when project changes
+  useEffect(() => { setSubgroupId(''); }, [projectId]);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
@@ -28,27 +33,28 @@ export default function AddItemModal({ defaultProjectId, itemType, onClose }: Pr
     const trimmed = name.trim();
     if (!trimmed || !projectId) return;
 
+    const sgId = subgroupId || null;
+
     if (itemType === 'task') {
       dispatch({
         type: 'ADD_ITEM',
         item: {
-          id: genId(),
-          type: 'task',
-          projectId,
+          id: genId(), type: 'task',
+          projectId, subgroupId: sgId,
           name: trimmed,
-          startDate: null, // Will be set by clicking the calendar
-          endDate: null,
+          startDate: null, endDate: null,
+          order: 0, // will be overwritten by dispatchWithSync
         },
       });
     } else {
       dispatch({
         type: 'ADD_ITEM',
         item: {
-          id: genId(),
-          type: 'milestone',
-          projectId,
+          id: genId(), type: 'milestone',
+          projectId, subgroupId: sgId,
           name: trimmed,
-          date: null, // Will be set by clicking the calendar
+          date: null,
+          order: 0,
         },
       });
     }
@@ -64,7 +70,6 @@ export default function AddItemModal({ defaultProjectId, itemType, onClose }: Pr
           {itemType === 'task' ? '📋 New Task' : '🔷 New Milestone'}
         </h2>
 
-        {/* Name input */}
         <div className="form-group">
           <label className="form-label">
             {itemType === 'task' ? 'Task Name' : 'Milestone Name'}
@@ -79,13 +84,10 @@ export default function AddItemModal({ defaultProjectId, itemType, onClose }: Pr
           />
         </div>
 
-        {/* Project selector */}
         <div className="form-group">
           <label className="form-label">Swim Lane (Project)</label>
           {state.projects.length === 0 ? (
-            <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>
-              No projects yet — create a swim lane first.
-            </p>
+            <p style={{ color: 'var(--text-muted)', fontSize: 12 }}>No projects yet.</p>
           ) : (
             <select
               className="form-input"
@@ -101,32 +103,36 @@ export default function AddItemModal({ defaultProjectId, itemType, onClose }: Pr
           )}
         </div>
 
-        {/* Contextual hint explaining what happens after creation */}
+        {/* Subgroup selector — only shown if the selected project has subgroups */}
+        {availableSubgroups.length > 0 && (
+          <div className="form-group">
+            <label className="form-label">Subgroup <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>(optional)</span></label>
+            <select
+              className="form-input"
+              value={subgroupId}
+              onChange={e => setSubgroupId(e.target.value)}
+              style={{ appearance: 'auto' }}
+            >
+              <option value="">— No subgroup (top-level) —</option>
+              {availableSubgroups.map(s => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
         {selectedProject && (
           <div style={{
-            padding: '10px 14px',
-            borderRadius: 8,
-            background: '#f3f4f7',
-            marginBottom: 20,
-            fontSize: 12,
-            color: 'var(--text-secondary)',
-            lineHeight: 1.5,
+            padding: '10px 14px', borderRadius: 8, background: '#f3f4f7',
+            marginBottom: 20, fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5,
           }}>
             {itemType === 'task' ? (
               <>
-                After creating, the task row will appear under{' '}
-                <strong style={{ color: selectedProject.color }}>{selectedProject.name}</strong>.
-                <br />
-                <strong>Click once</strong> in the calendar row to set the start date,
-                then <strong>click again</strong> to set the end date.
+                After creating, click once in the calendar row to set the start date,
+                then click again to set the end date.
               </>
             ) : (
-              <>
-                After creating, the milestone row will appear under{' '}
-                <strong style={{ color: selectedProject.color }}>{selectedProject.name}</strong>.
-                <br />
-                <strong>Click once</strong> in the calendar row to place the milestone.
-              </>
+              <>After creating, click once in the calendar row to place the milestone.</>
             )}
           </div>
         )}
