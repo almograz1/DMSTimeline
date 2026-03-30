@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useGantt } from '../context/GanttContext';
-import type { CalendarRow, GanttTask, GanttMilestone, Project, Subgroup, VacationPeriod } from '../types';
+import type { CalendarRow, GanttTask, GanttMilestone, Project, Subgroup } from '../types';
 import {
   parseDate, formatDate, addDays, dayDiff,
   buildDailyColumns, buildWeeklyColumns,
@@ -856,9 +856,9 @@ export default function GanttChart() {
                 const name = quickAdd.name.trim();
                 if (!name || !quickAdd.projectId) return;
                 if (quickAdd.type === 'task') {
-                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', projectId: quickAdd.projectId, name, startDate: quickAdd.date, endDate: null, order: 0 } });
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', userId: '', timelineId: '', projectId: quickAdd.projectId, name, startDate: quickAdd.date, endDate: null, order: 0 } });
                 } else {
-                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'milestone', projectId: quickAdd.projectId, name, date: quickAdd.date, order: 0 } });
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'milestone', userId: '', timelineId: '', projectId: quickAdd.projectId, name, date: quickAdd.date, order: 0 } });
                 }
                 setQuickAdd(null);
               }
@@ -889,9 +889,9 @@ export default function GanttChart() {
                 const name = quickAdd.name.trim();
                 if (!name || !quickAdd.projectId) return;
                 if (quickAdd.type === 'task') {
-                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', projectId: quickAdd.projectId, name, startDate: quickAdd.date, endDate: null, order: 0 } });
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', userId: '', timelineId: '', projectId: quickAdd.projectId, name, startDate: quickAdd.date, endDate: null, order: 0 } });
                 } else {
-                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'milestone', projectId: quickAdd.projectId, name, date: quickAdd.date, order: 0 } });
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'milestone', userId: '', timelineId: '', projectId: quickAdd.projectId, name, date: quickAdd.date, order: 0 } });
                 }
                 setQuickAdd(null);
               }}
