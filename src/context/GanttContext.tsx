@@ -8,7 +8,7 @@ import {
   writeBatch, query, where,
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import type { Project, Subgroup, MilestoneRow, GanttItem, GanttTask, GanttMilestone, ViewMode, VacationPeriod } from '../types';
+import type { Project, Subgroup, MilestoneRow, TaskRow, GanttItem, GanttTask, GanttMilestone, ViewMode, VacationPeriod } from '../types';
 import { formatDate, defaultCalendarWindow, addDays, parseDate } from '../utils/dateUtils';
 import { useAuth } from '../auth/AuthContext';
 import { useTimeline } from '../auth/TimelineContext';
@@ -16,6 +16,7 @@ import { useTimeline } from '../auth/TimelineContext';
 const PROJECTS_COL  = 'projects';
 const VACATIONS_COL      = 'vacations';
 const MILESTONE_ROWS_COL = 'milestoneRows';
+const TASK_ROWS_COL      = 'taskRows';
 const SUBGROUPS_COL = 'subgroups';
 const ITEMS_COL     = 'items';
 
@@ -38,6 +39,7 @@ interface GanttState {
   items: GanttItem[];
   vacations: VacationPeriod[];
   milestoneRows: MilestoneRow[];
+  taskRows: TaskRow[];
   viewMode: ViewMode;
   calendarStart: string;
   calendarDays: number;
@@ -53,7 +55,7 @@ type Action =
   | { type: 'DELETE_PROJECT';          projectId: string }
   | { type: 'TOGGLE_COLLAPSE';         projectId: string }
   | { type: 'REORDER_PROJECTS';        orderedIds: string[] }
-  | { type: 'REORDER_ITEMS';           projectId: string; orderedIds: string[] }
+  | { type: 'REORDER_ITEMS';           projectId: string; subgroupId?: string | null; orderedIds: string[] }
   | { type: 'ADD_SUBGROUP';            subgroup: Subgroup }
   | { type: 'DELETE_SUBGROUP';         subgroupId: string }
   | { type: 'TOGGLE_SUBGROUP_COLLAPSE'; subgroupId: string }
@@ -64,6 +66,9 @@ type Action =
   | { type: 'LOAD_MILESTONE_ROWS';    milestoneRows: MilestoneRow[] }
   | { type: 'ADD_MILESTONE_ROW';      milestoneRow: MilestoneRow }
   | { type: 'DELETE_MILESTONE_ROW';   milestoneRowId: string }
+  | { type: 'LOAD_TASK_ROWS';         taskRows: TaskRow[] }
+  | { type: 'ADD_TASK_ROW';           taskRow: TaskRow }
+  | { type: 'DELETE_TASK_ROW';        taskRowId: string }
   | { type: 'ADD_VACATION';            vacation: VacationPeriod }
   | { type: 'DELETE_VACATION';         vacationId: string }
   | { type: 'SET_VIEW_MODE';           viewMode: ViewMode }
@@ -103,11 +108,16 @@ function reducer(state: GanttState, action: Action): GanttState {
       return { ...state, projects: reindex(sorted) };
     }
     case 'REORDER_ITEMS': {
-      const indexMap     = new Map(action.orderedIds.map((id, i) => [id, i]));
-      const projectTasks = state.items
-        .filter(i => i.projectId === action.projectId && i.type === 'task')
+      const indexMap = new Map(action.orderedIds.map((id, i) => [id, i]));
+      // Only reindex tasks within the specific subgroup (not all project tasks)
+      const groupTasks = state.items
+        .filter(i =>
+          i.projectId === action.projectId &&
+          i.type === 'task' &&
+          (i.subgroupId ?? null) === (action.subgroupId ?? null)
+        )
         .sort((a, b) => (indexMap.get(a.id) ?? 0) - (indexMap.get(b.id) ?? 0));
-      const reindexed  = reindex(projectTasks);
+      const reindexed  = reindex(groupTasks);
       const reindexMap = new Map(reindexed.map(t => [t.id, t]));
       return { ...state, items: state.items.map(item => reindexMap.get(item.id) ?? item) };
     }
@@ -152,6 +162,18 @@ function reducer(state: GanttState, action: Action): GanttState {
       return { ...state, vacations: [...state.vacations, action.vacation] };
     case 'DELETE_VACATION':
       return { ...state, vacations: state.vacations.filter(v => v.id !== action.vacationId) };
+    case 'LOAD_TASK_ROWS':
+      return { ...state, taskRows: [...action.taskRows].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) };
+    case 'ADD_TASK_ROW':
+      return { ...state, taskRows: [...state.taskRows, action.taskRow] };
+    case 'DELETE_TASK_ROW':
+      return {
+        ...state,
+        taskRows: state.taskRows.filter(r => r.id !== action.taskRowId),
+        items: state.items.map(item =>
+          item.type === 'task' && item.taskRowId === action.taskRowId ? { ...item, taskRowId: null } : item
+        ),
+      };
     case 'LOAD_MILESTONE_ROWS':
       return { ...state, milestoneRows: [...action.milestoneRows].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) };
     case 'ADD_MILESTONE_ROW':
@@ -184,7 +206,7 @@ function reducer(state: GanttState, action: Action): GanttState {
 function buildInitialState(): GanttState {
   const { startDate, totalDays } = defaultCalendarWindow();
   return {
-    projects: [], subgroups: [], items: [], vacations: [], milestoneRows: [],
+    projects: [], subgroups: [], items: [], vacations: [], milestoneRows: [], taskRows: [],
     viewMode: 'weekly',
     calendarStart: formatDate(startDate),
     calendarDays: totalDays,
@@ -256,6 +278,11 @@ export function GanttProvider({ children }: { children: React.ReactNode }) {
       snapshot => { dispatch({ type: 'LOAD_VACATIONS', vacations: snapshot.docs.map(d => d.data() as VacationPeriod) }); },
       err => { console.error('vacations:', err); }
     );
+    const unsubTaskRows = onSnapshot(
+      query(collection(db, TASK_ROWS_COL), where('timelineId', '==', tid)),
+      snapshot => { dispatch({ type: 'LOAD_TASK_ROWS', taskRows: snapshot.docs.map(d => d.data() as TaskRow) }); },
+      err => { console.error('taskRows:', err); }
+    );
     const unsubMilestoneRows = onSnapshot(
       query(collection(db, MILESTONE_ROWS_COL), where('timelineId', '==', tid)),
       snapshot => {
@@ -264,7 +291,7 @@ export function GanttProvider({ children }: { children: React.ReactNode }) {
       err => { console.error('milestoneRows:', err); }
     );
 
-    return () => { unsubProjects(); unsubSubgroups(); unsubItems(); unsubVacations(); unsubMilestoneRows(); };
+    return () => { unsubProjects(); unsubSubgroups(); unsubItems(); unsubVacations(); unsubMilestoneRows(); unsubTaskRows(); };
   }, [user, activeTimeline]);
 
   // ── Local → Firestore ────────────────────────────────────────────────────────
@@ -291,6 +318,10 @@ export function GanttProvider({ children }: { children: React.ReactNode }) {
     }
     if (action.type === 'ADD_VACATION') {
       action = { ...action, vacation: { ...(action as { vacation: import('../types').VacationPeriod }).vacation, userId: uid, timelineId: tid } };
+    }
+    if (action.type === 'ADD_TASK_ROW') {
+      const siblings = state.taskRows.filter(r => r.projectId === (action as { taskRow: TaskRow }).taskRow.projectId);
+      action = { ...action, taskRow: { ...(action as { taskRow: TaskRow }).taskRow, userId: uid, timelineId: tid, order: nextOrder(siblings) } };
     }
     if (action.type === 'ADD_MILESTONE_ROW') {
       const siblings = state.milestoneRows.filter(r => r.projectId === (action as { milestoneRow: MilestoneRow }).milestoneRow.projectId);
@@ -347,7 +378,11 @@ async function syncToFirestore(action: Action, state: GanttState): Promise<void>
     }
     case 'REORDER_ITEMS': {
       const batch = writeBatch(db);
-      for (const t of state.items.filter(i => i.projectId === action.projectId && i.type === 'task'))
+      for (const t of state.items.filter(i =>
+        i.projectId === action.projectId &&
+        i.type === 'task' &&
+        (i.subgroupId ?? null) === (action.subgroupId ?? null)
+      ))
         batch.set(doc(db, ITEMS_COL, t.id), { order: t.order }, { merge: true });
       await batch.commit();
       break;
@@ -373,6 +408,18 @@ async function syncToFirestore(action: Action, state: GanttState): Promise<void>
     case 'DELETE_VACATION':
       await deleteDoc(doc(db, VACATIONS_COL, action.vacationId));
       break;
+    case 'ADD_TASK_ROW':
+      await setDoc(doc(db, TASK_ROWS_COL, action.taskRow.id), action.taskRow);
+      break;
+    case 'DELETE_TASK_ROW': {
+      await deleteDoc(doc(db, TASK_ROWS_COL, action.taskRowId));
+      const batch = writeBatch(db);
+      for (const item of state.items.filter(i => i.type === 'task' && i.taskRowId === action.taskRowId))
+        batch.set(doc(db, ITEMS_COL, item.id), { taskRowId: null }, { merge: true });
+      if (state.items.some(i => i.type === 'task' && i.taskRowId === action.taskRowId))
+        await batch.commit();
+      break;
+    }
     case 'ADD_MILESTONE_ROW':
       await setDoc(doc(db, MILESTONE_ROWS_COL, action.milestoneRow.id), action.milestoneRow);
       break;

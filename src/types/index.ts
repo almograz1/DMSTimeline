@@ -56,6 +56,8 @@ export interface GanttTask {
   order: number;
   description?: string;
   color?: string;
+  /** If set, this task belongs to a named task row (shared calendar line) */
+  taskRowId?: string | null;
 }
 
 export interface GanttMilestone {
@@ -80,6 +82,7 @@ export type CalendarRow =
   | { kind: 'header';     project: Project }
   | { kind: 'subheader';  subgroup: Subgroup; project: Project }
   | { kind: 'item';       item: GanttTask;              project: Project; subgroup?: Subgroup }
+  | { kind: 'taskrow';    tasks: GanttTask[];            project: Project; subgroup?: Subgroup; taskRow: TaskRow }
   | { kind: 'milestones'; milestones: GanttMilestone[]; project: Project; subgroup?: Subgroup; milestoneRow?: MilestoneRow };
 
 /** A vacation period blocks task/milestone placement across all swimlanes */
@@ -90,4 +93,19 @@ export interface VacationPeriod {
   name: string;
   startDate: string;
   endDate: string;
+}
+
+/**
+ * A task row config defines a named row inside a project/subgroup.
+ * Multiple tasks can share the same row and are rendered stacked/side-by-side.
+ * Tasks with no taskRowId get their own independent row (default behaviour).
+ */
+export interface TaskRow {
+  id: string;
+  userId: string;
+  timelineId: string;
+  projectId: string;
+  subgroupId?: string | null;
+  name: string;
+  order: number;
 }

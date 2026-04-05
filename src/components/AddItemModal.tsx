@@ -14,14 +14,16 @@ export default function AddItemModal({ defaultProjectId, itemType, onClose }: Pr
   const [projectId, setProjectId] = useState(defaultProjectId ?? state.projects[0]?.id ?? '');
   const [subgroupId, setSubgroupId]       = useState<string>('');
   const [milestoneRowId, setMilestoneRowId] = useState<string>('');
+  const [taskRowId, setTaskRowId]             = useState<string>('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Subgroups that belong to the currently selected project
-  const availableSubgroups   = state.subgroups.filter(s => s.projectId === projectId);
+  const availableSubgroups     = state.subgroups.filter(s => s.projectId === projectId);
   const availableMilestoneRows = state.milestoneRows.filter(r => r.projectId === projectId);
+  const availableTaskRows      = state.taskRows.filter(r => r.projectId === projectId && (r.subgroupId ?? null) === (subgroupId || null));
 
   // Reset subgroup selection when project changes
-  useEffect(() => { setSubgroupId(''); setMilestoneRowId(''); }, [projectId]);
+  useEffect(() => { setSubgroupId(''); setMilestoneRowId(''); setTaskRowId(''); }, [projectId]);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
@@ -43,6 +45,7 @@ export default function AddItemModal({ defaultProjectId, itemType, onClose }: Pr
         item: {
           id: genId(), type: 'task',
           projectId, subgroupId: sgId,
+          taskRowId: taskRowId || null,
           name: trimmed,
           startDate: null, endDate: null,
           order: 0, // will be overwritten by dispatchWithSync

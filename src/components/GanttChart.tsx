@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useGantt } from '../context/GanttContext';
-import type { CalendarRow, GanttTask, GanttMilestone, Project, Subgroup, MilestoneRow } from '../types';
+import type { CalendarRow, GanttTask, GanttMilestone, Project, Subgroup, MilestoneRow, TaskRow } from '../types';
 import {
   parseDate, formatDate, addDays, dayDiff,
   buildDailyColumns, buildWeeklyColumns,
@@ -232,7 +232,7 @@ function DropIndicator({ color = 'var(--accent)' }: { color?: string }) {
 
 export default function GanttChart() {
   const { state, dispatch } = useGantt();
-  const { projects, subgroups, items, vacations, milestoneRows, viewMode, calendarStart, calendarDays } = state;
+  const { projects, subgroups, items, vacations, milestoneRows, taskRows, viewMode, calendarStart, calendarDays } = state;
 
   // ── Zoom — must be declared before ppd/colWidth which depend on zoomScale ──
   const ZOOM_LEVELS  = [0.8, 1.0, 1.2] as const;
@@ -464,7 +464,7 @@ export default function GanttChart() {
           const insertAt = pos === 'after' ? toIdx + 1 : toIdx;
           const newIds = [...ids];
           newIds.splice(insertAt, 0, drag.id);
-          dispatch({ type: 'REORDER_ITEMS', projectId: drag.projectId!, orderedIds: newIds });
+          dispatch({ type: 'REORDER_ITEMS', projectId: drag.projectId!, subgroupId: destSubgroup, orderedIds: newIds });
         }
       }
     }
@@ -492,9 +492,26 @@ export default function GanttChart() {
       project: Project,
       subgroup?: Subgroup
     ) {
-      const tasks      = (projectItems.filter(i => i.type === 'task')      as GanttTask[]).sort((a,b) => (a.order??0)-(b.order??0));
+      const allTasks   = (projectItems.filter(i => i.type === 'task')      as GanttTask[]).sort((a,b) => (a.order??0)-(b.order??0));
       const milestones = (projectItems.filter(i => i.type === 'milestone') as GanttMilestone[]).sort((a,b) => (a.order??0)-(b.order??0));
-      for (const task of tasks) result.push({ kind: 'item', item: task, project, subgroup });
+
+      // Tasks in named task rows → grouped onto one calendar line each
+      const sgTaskRows = taskRows.filter(r =>
+        r.projectId === project.id && (r.subgroupId ?? null) === (subgroup?.id ?? null)
+      );
+      const validTaskRowIds = new Set(sgTaskRows.map(r => r.id));
+
+      // Independent tasks (no taskRowId or stale taskRowId)
+      const independentTasks = allTasks.filter(t => !t.taskRowId || !validTaskRowIds.has(t.taskRowId));
+      for (const task of independentTasks) result.push({ kind: 'item', item: task, project, subgroup });
+
+      // Named task rows
+      for (const tRow of sgTaskRows) {
+        const rowTasks = allTasks.filter(t => t.taskRowId === tRow.id);
+        result.push({ kind: 'taskrow', tasks: rowTasks, project, subgroup, taskRow: tRow });
+      }
+
+      const tasks = allTasks; // alias for milestone section below
 
       const projectMilestoneRows = milestoneRows.filter(r => r.projectId === project.id);
 
@@ -615,6 +632,7 @@ export default function GanttChart() {
     x: number; y: number;
     name: string;
     projectId: string;
+    subgroupId: string;   // '' = no subgroup (top-level)
     milestoneRowId: string;
   } | null>(null);
 
@@ -680,8 +698,11 @@ export default function GanttChart() {
   }, [dispatch]);
 
   const saveDetailColor = useCallback((itemId: string, color: string | null) => {
-    // null means "reset to project color" — store as undefined/null to remove override
     dispatch({ type: 'UPDATE_ITEM', itemId, patch: { color: color ?? undefined } });
+  }, [dispatch]);
+
+  const saveDetailName = useCallback((itemId: string, name: string) => {
+    if (name.trim()) dispatch({ type: 'UPDATE_ITEM', itemId, patch: { name: name.trim() } });
   }, [dispatch]);
 
   // ── Click handlers ────────────────────────────────────────────────────────────
@@ -776,6 +797,21 @@ export default function GanttChart() {
                   />
                   {showDropAfter && <DropIndicator color={row.project.color} />}
                 </React.Fragment>
+              );
+            }
+
+            if (row.kind === 'taskrow') {
+              const key = `tr-${row.taskRow.id}`;
+              return (
+                <LeftPanelTaskRowGroup
+                  key={key}
+                  row={row}
+                  rowH={ROW_H}
+                  isHovered={hoveredKey === key}
+                  onHover={setHoveredKey}
+                  onDeleteTask={id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
+                  onDeleteRow={() => dispatch({ type: 'DELETE_TASK_ROW', taskRowId: row.taskRow.id })}
+                />
               );
             }
 
@@ -908,6 +944,27 @@ export default function GanttChart() {
                 );
               }
 
+              if (row.kind === 'taskrow') {
+                return (
+                  <CalendarTaskRowGroup
+                    key={`tr-${row.taskRow.id}`}
+                    tasks={row.tasks}
+                    taskRow={row.taskRow}
+                    project={row.project}
+                    rowH={ROW_H}
+                    totalWidth={totalCalWidth}
+                    calStartDate={calStartDate}
+                    ppd={ppd}
+                    columns={columns}
+                    colWidth={colWidth}
+                    isHovered={hoveredKey === `tr-${row.taskRow.id}`}
+                    onHover={setHoveredKey}
+                    onBarClick={(e, task) => openDetail(task, task.color ?? row.project.color, e)}
+                    today={today}
+                  />
+                );
+              }
+
               if (row.kind === 'subheader') {
                 return (
                   <CalendarSubgroupRow
@@ -1002,13 +1059,13 @@ export default function GanttChart() {
 
           {/* Add Task */}
           <CtxMenuItem icon="▬" label="Add Task here" onClick={() => {
-            setQuickAdd({ type: 'task', date: vacMenu.date, x: vacMenu.x, y: vacMenu.y, name: '', projectId: vacMenu.projectId || (projects[0]?.id ?? ''), milestoneRowId: '' });
+            setQuickAdd({ type: 'task', date: vacMenu.date, x: vacMenu.x, y: vacMenu.y, name: '', projectId: vacMenu.projectId || (projects[0]?.id ?? ''), subgroupId: vacMenu.subgroupId ?? '', milestoneRowId: '' });
             setVacMenu(null);
           }} />
 
           {/* Add Milestone */}
           <CtxMenuItem icon="◆" label="Add Milestone here" onClick={() => {
-            setQuickAdd({ type: 'milestone', date: vacMenu.date, x: vacMenu.x, y: vacMenu.y, name: '', projectId: vacMenu.projectId || (projects[0]?.id ?? ''), milestoneRowId: '' });
+            setQuickAdd({ type: 'milestone', date: vacMenu.date, x: vacMenu.x, y: vacMenu.y, name: '', projectId: vacMenu.projectId || (projects[0]?.id ?? ''), subgroupId: vacMenu.subgroupId ?? '', milestoneRowId: '' });
             setVacMenu(null);
           }} />
 
@@ -1085,9 +1142,9 @@ export default function GanttChart() {
                 const name = quickAdd.name.trim();
                 if (!name || !quickAdd.projectId) return;
                 if (quickAdd.type === 'task') {
-                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', userId: '', timelineId: '', projectId: quickAdd.projectId, name, startDate: quickAdd.date, endDate: null, order: 0 } });
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', userId: '', timelineId: '', projectId: quickAdd.projectId, subgroupId: quickAdd.subgroupId || null, name, startDate: quickAdd.date, endDate: null, order: 0 } });
                 } else {
-                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'milestone', userId: '', timelineId: '', projectId: quickAdd.projectId, milestoneRowId: quickAdd.milestoneRowId || null, name, date: quickAdd.date, order: 0 } });
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'milestone', userId: '', timelineId: '', projectId: quickAdd.projectId, subgroupId: quickAdd.subgroupId || null, milestoneRowId: quickAdd.milestoneRowId || null, name, date: quickAdd.date, order: 0 } });
                 }
                 setQuickAdd(null);
               }
@@ -1100,7 +1157,7 @@ export default function GanttChart() {
             <select
               className="form-input"
               value={quickAdd.projectId}
-              onChange={e => setQuickAdd(q => q && ({ ...q, projectId: e.target.value, milestoneRowId: '' }))}
+              onChange={e => setQuickAdd(q => q && ({ ...q, projectId: e.target.value, subgroupId: '', milestoneRowId: '' }))}
               style={{ appearance: 'auto', width: '100%', boxSizing: 'border-box' }}
             >
               {projects.map(p => (
@@ -1108,6 +1165,25 @@ export default function GanttChart() {
               ))}
             </select>
           )}
+
+          {/* Subgroup selector */}
+          {(() => {
+            const sgs = subgroups.filter(s => s.projectId === quickAdd.projectId);
+            if (sgs.length === 0) return null;
+            return (
+              <select
+                className="form-input"
+                value={quickAdd.subgroupId}
+                onChange={e => setQuickAdd(q => q && ({ ...q, subgroupId: e.target.value }))}
+                style={{ appearance: 'auto', width: '100%', boxSizing: 'border-box' }}
+              >
+                <option value="">— No subgroup (top-level) —</option>
+                {sgs.map(s => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            );
+          })()}
 
           {/* Milestone row selector */}
           {quickAdd.type === 'milestone' && (() => {
@@ -1137,9 +1213,9 @@ export default function GanttChart() {
                 const name = quickAdd.name.trim();
                 if (!name || !quickAdd.projectId) return;
                 if (quickAdd.type === 'task') {
-                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', userId: '', timelineId: '', projectId: quickAdd.projectId, name, startDate: quickAdd.date, endDate: null, order: 0 } });
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', userId: '', timelineId: '', projectId: quickAdd.projectId, subgroupId: quickAdd.subgroupId || null, name, startDate: quickAdd.date, endDate: null, order: 0 } });
                 } else {
-                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'milestone', userId: '', timelineId: '', projectId: quickAdd.projectId, milestoneRowId: quickAdd.milestoneRowId || null, name, date: quickAdd.date, order: 0 } });
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'milestone', userId: '', timelineId: '', projectId: quickAdd.projectId, subgroupId: quickAdd.subgroupId || null, milestoneRowId: quickAdd.milestoneRowId || null, name, date: quickAdd.date, order: 0 } });
                 }
                 setQuickAdd(null);
               }}
@@ -1235,6 +1311,7 @@ export default function GanttChart() {
         onClose={closeDetail}
         onSave={desc => saveDetail(detailPanel.item.id, desc)}
         onSaveColor={color => saveDetailColor(detailPanel.item.id, color)}
+        onSaveName={name => saveDetailName(detailPanel.item.id, name)}
       />
     )}
     </>
@@ -1507,7 +1584,7 @@ const ITEM_COLORS = [
   '#3b82f6','#8b5cf6','#ec4899','#6b7280','#1e293b',
 ];
 
-export function DetailPanel({ item, color, projectColor, anchorRect, onClose, onSave, onSaveColor }: {
+export function DetailPanel({ item, color, projectColor, anchorRect, onClose, onSave, onSaveColor, onSaveName }: {
   item: GanttTask | GanttMilestone;
   color: string;
   projectColor: string;
@@ -1515,8 +1592,10 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
   onClose: () => void;
   onSave: (description: string) => void;
   onSaveColor: (color: string | null) => void;
+  onSaveName: (name: string) => void;
 }) {
   const [desc, setDesc]               = useState(item.description ?? '');
+  const [name, setName]               = useState(item.name);
   const [activeColor, setActiveColor] = useState<string | null>(item.color ?? null);
   const panelRef = useRef<HTMLDivElement>(null);
 
@@ -1566,6 +1645,8 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
     function onPointerDown(e: PointerEvent) {
       if (panelRef.current && !panelRef.current.contains(e.target as Node)) {
         onSave(desc);
+        onSaveColor(activeColor);
+        onSaveName(name.trim() || item.name);
         onClose();
       }
     }
@@ -1576,7 +1657,7 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
   // Close on Escape
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') { onSave(desc); onClose(); }
+      if (e.key === 'Escape') { onSave(desc); onSaveColor(activeColor); onSaveName(name.trim() || item.name); onClose(); }
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -1606,15 +1687,30 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
         gap: 10,
       }}
     >
-      {/* Header — drag handle */}
-      <div onMouseDown={onHeaderMouseDown} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, cursor: 'grab' }}>
-        <div style={{ width: 10, height: 10, borderRadius: isMilestone ? 2 : 3, background: activeColor ?? projectColor, transform: isMilestone ? 'rotate(45deg)' : 'none', flexShrink: 0, marginTop: 3 }} />
+      {/* Header — drag handle (grip area excludes the input) */}
+      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+        <div onMouseDown={onHeaderMouseDown} style={{ cursor: 'grab', marginTop: 6, flexShrink: 0 }}>
+          <div style={{ width: 10, height: 10, borderRadius: isMilestone ? 2 : 3, background: activeColor ?? projectColor, transform: isMilestone ? 'rotate(45deg)' : 'none' }} />
+        </div>
         <div style={{ flex: 1 }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.3 }}>{item.name}</div>
+          <input
+            value={name}
+            onChange={e => setName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); if (e.key === 'Escape') { setName(item.name); e.currentTarget.blur(); } }}
+            style={{
+              fontWeight: 700, fontSize: 13, color: 'var(--text-primary)', lineHeight: 1.3,
+              width: '100%', background: 'transparent', border: 'none', outline: 'none',
+              borderBottom: '1.5px solid transparent', borderRadius: 0, padding: '0 0 1px 0',
+              fontFamily: 'inherit',
+              transition: 'border-color 0.15s',
+            }}
+            onFocus={e => (e.target.style.borderBottomColor = activeColor ?? projectColor)}
+            onBlur={e => { e.target.style.borderBottomColor = 'transparent'; if (name.trim()) onSaveName(name.trim()); }}
+          />
           <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>{dateLabel}</div>
         </div>
         <button
-          onClick={() => { onSave(desc); onClose(); }}
+          onClick={() => { onSave(desc); onSaveColor(activeColor); onSaveName(name.trim() || item.name); onClose(); }}
           style={{ width: 20, height: 20, borderRadius: 4, background: 'var(--bg-header)', color: 'var(--text-secondary)', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
         >×</button>
       </div>
@@ -1688,7 +1784,7 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
 
       {/* Save button */}
       <button
-        onClick={() => { onSave(desc); onSaveColor(activeColor); onClose(); }}
+        onClick={() => { onSave(desc); onSaveColor(activeColor); onSaveName(name.trim() || item.name); onClose(); }}
         style={{
           background: activeColor ?? projectColor,
           color: '#fff',
@@ -1833,6 +1929,127 @@ function CalendarSubgroupRow({ subgroup, project, totalWidth, rowH, columns, col
         }}>
           {subgroup.name}
         </span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Left Panel: Task Row Group ───────────────────────────────────────────────
+
+function LeftPanelTaskRowGroup({ row, rowH, isHovered, onHover, onDeleteTask, onDeleteRow }: {
+  row: CalendarRow & { kind: 'taskrow' };
+  rowH: number;
+  isHovered: boolean;
+  onHover: (key: string | null) => void;
+  onDeleteTask: (id: string) => void;
+  onDeleteRow: () => void;
+}) {
+  const { tasks, project, taskRow } = row;
+  const key = `tr-${taskRow.id}`;
+
+  return (
+    <div
+      style={{ height: rowH, display: 'flex', alignItems: 'center', paddingLeft: 28, paddingRight: 8, gap: 6,
+        background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)',
+        borderBottom: '1px solid var(--border)', transition: 'background 0.1s', position: 'relative' }}
+      onMouseEnter={() => onHover(key)}
+      onMouseLeave={() => onHover(null)}
+    >
+      {/* Row icon */}
+      <div style={{ width: 12, height: 5, background: project.color, borderRadius: 2, flexShrink: 0, opacity: 0.5 }} />
+
+      {/* Row name */}
+      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', flex: 1,
+        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {taskRow.name}
+      </span>
+
+      {/* Task count */}
+      <span style={{ fontSize: 10, fontWeight: 600, color: project.color,
+        background: project.color + '18', borderRadius: 10, padding: '1px 6px', flexShrink: 0 }}>
+        {tasks.length}
+      </span>
+
+      {/* Delete row */}
+      {isHovered && (
+        <button onClick={() => { if (window.confirm('Delete task row? Tasks move to independent rows.')) onDeleteRow(); }}
+          style={{ width: 16, height: 16, borderRadius: 3, background: '#fee2e2', color: '#ef4444', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>×</button>
+      )}
+
+      {/* Hover tooltip */}
+      {isHovered && tasks.length > 0 && (
+        <div style={{ position: 'absolute', left: '100%', top: 0, zIndex: 50,
+          background: 'var(--bg-surface)', border: '1px solid var(--border)',
+          borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+          padding: '8px 0', minWidth: 200 }}>
+          {tasks.map(t => (
+            <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 12px' }}>
+              <div style={{ width: 10, height: 4, background: t.color ?? project.color, borderRadius: 2, flexShrink: 0 }} />
+              <span style={{ fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>{t.name}</span>
+              <button onClick={() => onDeleteTask(t.id)}
+                style={{ width: 14, height: 14, borderRadius: 3, background: '#fee2e2', color: '#ef4444', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Calendar: Task Row Group ─────────────────────────────────────────────────
+// Renders multiple task bars stacked vertically within a single ROW_H row
+
+function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, onHover, onBarClick, today }: {
+  tasks: GanttTask[]; taskRow: TaskRow; project: Project;
+  rowH: number; totalWidth: number; calStartDate: Date; ppd: number;
+  columns: Date[]; colWidth: number; isHovered: boolean;
+  onHover: (key: string | null) => void;
+  onBarClick: (e: React.MouseEvent, task: GanttTask) => void;
+  today: string;
+}) {
+  const key = `tr-${taskRow.id}`;
+  const BAR_H    = Math.max(10, Math.floor((rowH - 8) / Math.max(tasks.length, 1)));
+  const BAR_GAP  = 2;
+
+  return (
+    <div
+      style={{ height: rowH, width: totalWidth, position: 'relative',
+        background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)',
+        borderBottom: '1px solid var(--border)', display: 'flex', transition: 'background 0.1s' }}
+      onMouseEnter={() => onHover(key)}
+      onMouseLeave={() => onHover(null)}
+    >
+      {/* Column background */}
+      {columns.map((col, i) => (
+        <div key={i} style={{ width: colWidth, height: '100%', flexShrink: 0,
+          borderRight: '1px solid var(--border)',
+          background: formatDate(col) === today ? 'var(--accent-light)' : (isWeekend(col) && colWidth < 50 ? '#f9fafb' : 'transparent') }} />
+      ))}
+
+      {/* Task bars stacked */}
+      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 3, padding: '4px 0' }}>
+        {tasks.filter(t => t.startDate && t.endDate).map((t, i) => {
+          const start   = parseDate(t.startDate!);
+          const end     = parseDate(t.endDate!);
+          const leftPx  = dayDiff(calStartDate, start) * ppd;
+          const widthPx = (dayDiff(start, end) + 1) * ppd;
+          const topPx   = i * (BAR_H + BAR_GAP);
+          const color   = t.color ?? project.color;
+          return (
+            <div key={t.id}
+              title={`${t.name}: ${t.startDate} → ${t.endDate}`}
+              onClick={e => { e.stopPropagation(); onBarClick(e, t); }}
+              style={{ position: 'absolute', left: leftPx, width: Math.max(widthPx, 4), top: topPx,
+                height: BAR_H, background: color, borderRadius: 3,
+                display: 'flex', alignItems: 'center', paddingLeft: 4, overflow: 'hidden',
+                boxShadow: `0 1px 3px ${color}44`, cursor: 'pointer', pointerEvents: 'auto' }}>
+              <span style={{ fontSize: 9, fontWeight: 600, color: '#fff', whiteSpace: 'nowrap',
+                overflow: 'hidden', textOverflow: 'ellipsis', textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}>
+                {t.name}
+              </span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
