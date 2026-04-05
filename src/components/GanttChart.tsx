@@ -50,10 +50,10 @@ interface CalDragPreview {
 
 /** What is being dragged in the left panel */
 interface RowDragState {
-  kind: 'project' | 'task';
+  kind: 'project' | 'task' | 'taskrow';
   id: string;
-  projectId?: string;   // for tasks
-  subgroupId?: string | null; // current subgroup of the dragged item (null = top-level)
+  projectId?: string;
+  subgroupId?: string | null;
 }
 
 // ─── Sub-component: Task Bar ──────────────────────────────────────────────────
@@ -412,6 +412,20 @@ export default function GanttChart() {
         const insertAt = pos === 'after' ? toIdx + 1 : toIdx;
         newIds.splice(insertAt, 0, drag.id);
         dispatch({ type: 'REORDER_PROJECTS', orderedIds: newIds });
+      } else if (drag.kind === 'taskrow') {
+        // Reorder task rows within a project
+        const projectRows = taskRows.filter(r => r.projectId === drag.projectId);
+        const ids     = projectRows.map(r => r.id);
+        const fromIdx = ids.indexOf(drag.id);
+        let   toIdx   = ids.indexOf(targetKey.replace('tr-', ''));
+        if (fromIdx === -1 || toIdx === -1) return;
+        const newIds = [...ids];
+        newIds.splice(fromIdx, 1);
+        toIdx = newIds.indexOf(targetKey.replace('tr-', ''));
+        if (toIdx === -1) toIdx = newIds.length - 1;
+        const insertAt = pos === 'after' ? toIdx + 1 : toIdx;
+        newIds.splice(insertAt, 0, drag.id);
+        dispatch({ type: 'REORDER_TASK_ROWS', projectId: drag.projectId!, orderedIds: newIds });
       } else {
         // ── Task drag: may be cross-subgroup ────────────────────────────────
         // Determine what the drop target is:
@@ -822,16 +836,24 @@ export default function GanttChart() {
 
             if (row.kind === 'taskrow') {
               const key = `tr-${row.taskRow.id}`;
+              const isTaskRowDrag = rowDragStateRef.current?.kind === 'taskrow';
+              const showDropBefore = rowDropTarget === key && rowDropPosition === 'before' && isTaskRowDrag;
+              const showDropAfter  = rowDropTarget === key && rowDropPosition === 'after'  && isTaskRowDrag;
               return (
-                <LeftPanelTaskRowGroup
-                  key={key}
-                  row={row}
-                  rowH={ROW_H}
-                  isHovered={hoveredKey === key}
-                  onHover={setHoveredKey}
-                  onDeleteTask={id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
-                  onDeleteRow={() => dispatch({ type: 'DELETE_TASK_ROW', taskRowId: row.taskRow.id })}
-                />
+                <React.Fragment key={key}>
+                  {showDropBefore && <DropIndicator color={row.project.color} />}
+                  <LeftPanelTaskRowGroup
+                    ref={el => { if (el) rowRefs.current.set(key, el); else rowRefs.current.delete(key); }}
+                    row={row}
+                    rowH={ROW_H}
+                    isHovered={hoveredKey === key}
+                    onHover={setHoveredKey}
+                    onDeleteTask={id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
+                    onDeleteRow={() => dispatch({ type: 'DELETE_TASK_ROW', taskRowId: row.taskRow.id })}
+                    onGripMouseDown={e => startRowDrag(e, { kind: 'taskrow', id: row.taskRow.id, projectId: row.project.id })}
+                  />
+                  {showDropAfter && <DropIndicator color={row.project.color} />}
+                </React.Fragment>
               );
             }
 
@@ -1992,25 +2014,30 @@ function CalendarSubgroupRow({ subgroup, project, totalWidth, rowH, columns, col
 
 // ─── Left Panel: Task Row Group ───────────────────────────────────────────────
 
-function LeftPanelTaskRowGroup({ row, rowH, isHovered, onHover, onDeleteTask, onDeleteRow }: {
+const LeftPanelTaskRowGroup = React.forwardRef<HTMLDivElement, {
   row: CalendarRow & { kind: 'taskrow' };
   rowH: number;
   isHovered: boolean;
   onHover: (key: string | null) => void;
   onDeleteTask: (id: string) => void;
   onDeleteRow: () => void;
-}) {
+  onGripMouseDown: (e: React.MouseEvent) => void;
+}>(({ row, rowH, isHovered, onHover, onDeleteTask, onDeleteRow, onGripMouseDown }, ref) => {
   const { tasks, project, taskRow } = row;
   const key = `tr-${taskRow.id}`;
 
   return (
     <div
-      style={{ height: rowH, display: 'flex', alignItems: 'center', paddingLeft: 28, paddingRight: 8, gap: 6,
+      ref={ref}
+      style={{ height: rowH, display: 'flex', alignItems: 'center', paddingLeft: 8, paddingRight: 8, gap: 6,
         background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)',
         borderBottom: '1px solid var(--border)', transition: 'background 0.1s', position: 'relative' }}
       onMouseEnter={() => onHover(key)}
       onMouseLeave={() => onHover(null)}
     >
+      {/* Grip handle */}
+      <GripHandle onMouseDown={onGripMouseDown} />
+
       {/* Row icon */}
       <div style={{ width: 12, height: 5, background: project.color, borderRadius: 2, flexShrink: 0, opacity: 0.5 }} />
 
@@ -2053,7 +2080,8 @@ function LeftPanelTaskRowGroup({ row, rowH, isHovered, onHover, onDeleteTask, on
       )}
     </div>
   );
-}
+});
+LeftPanelTaskRowGroup.displayName = 'LeftPanelTaskRowGroup';
 
 // ─── Calendar: Task Row Group ─────────────────────────────────────────────────
 // Renders multiple task bars stacked vertically within a single ROW_H row

@@ -69,6 +69,7 @@ type Action =
   | { type: 'LOAD_TASK_ROWS';         taskRows: TaskRow[] }
   | { type: 'ADD_TASK_ROW';           taskRow: TaskRow }
   | { type: 'DELETE_TASK_ROW';        taskRowId: string }
+  | { type: 'REORDER_TASK_ROWS';      projectId: string; orderedIds: string[] }
   | { type: 'ADD_VACATION';            vacation: VacationPeriod }
   | { type: 'DELETE_VACATION';         vacationId: string }
   | { type: 'SET_VIEW_MODE';           viewMode: ViewMode }
@@ -162,6 +163,14 @@ function reducer(state: GanttState, action: Action): GanttState {
       return { ...state, vacations: [...state.vacations, action.vacation] };
     case 'DELETE_VACATION':
       return { ...state, vacations: state.vacations.filter(v => v.id !== action.vacationId) };
+    case 'REORDER_TASK_ROWS': {
+      const indexMap = new Map(action.orderedIds.map((id, i) => [id, i]));
+      const sorted   = [...state.taskRows.filter(r => r.projectId === action.projectId)]
+        .sort((a, b) => (indexMap.get(a.id) ?? 0) - (indexMap.get(b.id) ?? 0));
+      const reindexed = reindex(sorted);
+      const reindexMap = new Map(reindexed.map(r => [r.id, r]));
+      return { ...state, taskRows: state.taskRows.map(r => reindexMap.get(r.id) ?? r) };
+    }
     case 'LOAD_TASK_ROWS':
       return { ...state, taskRows: [...action.taskRows].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) };
     case 'ADD_TASK_ROW':
@@ -408,6 +417,13 @@ async function syncToFirestore(action: Action, state: GanttState): Promise<void>
     case 'DELETE_VACATION':
       await deleteDoc(doc(db, VACATIONS_COL, action.vacationId));
       break;
+    case 'REORDER_TASK_ROWS': {
+      const batch = writeBatch(db);
+      for (const r of state.taskRows.filter(r => r.projectId === action.projectId))
+        batch.set(doc(db, TASK_ROWS_COL, r.id), { order: r.order }, { merge: true });
+      await batch.commit();
+      break;
+    }
     case 'ADD_TASK_ROW':
       await setDoc(doc(db, TASK_ROWS_COL, action.taskRow.id), action.taskRow);
       break;
