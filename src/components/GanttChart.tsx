@@ -337,6 +337,8 @@ export default function GanttChart() {
    */
   const ganttScrollRef = useRef<HTMLDivElement>(null);
   const rowDragStateRef                                     = useRef<RowDragState | null>(null);
+  const rowsRef         = useRef<CalendarRow[]>([]);
+  const [rowDragKind, setRowDragKind]                       = useState<RowDragState['kind'] | null>(null);
   const [rowDropTarget,   setRowDropTarget]   = useState<string | null>(null);
   const [rowDropPosition, setRowDropPosition] = useState<'before' | 'after'>('after');
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map());
@@ -346,11 +348,11 @@ export default function GanttChart() {
     e.preventDefault();
     e.stopPropagation();
     rowDragStateRef.current = dragState;
+    setRowDragKind(dragState.kind);
     document.body.style.userSelect = 'none';
     document.body.style.cursor     = 'grabbing';
 
     function onMouseMove(ev: MouseEvent) {
-      // Find which registered row the cursor is over
       let bestKey: string | null = null;
       let bestPos: 'before' | 'after' = 'after';
       rowRefs.current.forEach((el, key) => {
@@ -365,15 +367,13 @@ export default function GanttChart() {
     }
 
     function onMouseUp() {
-      const drag       = rowDragStateRef.current;
-      const targetKey  = rowDropTarget;   // captured from state — stale closure risk
-      // Re-read from DOM instead:
       document.removeEventListener('mousemove', onMouseMove);
       document.removeEventListener('mouseup',   onMouseUp);
       document.body.style.userSelect = '';
       document.body.style.cursor     = '';
-      rowDragStateRef.current = null;
-      setRowDropTarget(null);
+      // NOTE: rowDragStateRef and rowDropTarget are cleared by commitReorder
+      // which fires from its own mouseup listener registered in a useEffect.
+      // Do NOT clear them here or commitReorder won't find them.
     }
 
     document.addEventListener('mousemove', onMouseMove);
@@ -397,7 +397,10 @@ export default function GanttChart() {
       const drag      = rowDragStateRef.current;
       const targetKey = rowDropTargetRef.current;
       const pos       = rowDropPosRef.current;
-      if (!drag || !targetKey || targetKey === drag.id) return;
+      if (!drag || !targetKey) return;
+      // For taskrow, key has tr- prefix; for others compare directly
+      const selfKey = drag.kind === "taskrow" ? "tr-" + drag.id : drag.id;
+      if (targetKey === selfKey) return;
 
       if (drag.kind === 'project') {
         // Reorder projects
@@ -413,19 +416,66 @@ export default function GanttChart() {
         newIds.splice(insertAt, 0, drag.id);
         dispatch({ type: 'REORDER_PROJECTS', orderedIds: newIds });
       } else if (drag.kind === 'taskrow') {
-        // Reorder task rows within a project
-        const projectRows = taskRows.filter(r => r.projectId === drag.projectId);
-        const ids     = projectRows.map(r => r.id);
-        const fromIdx = ids.indexOf(drag.id);
-        let   toIdx   = ids.indexOf(targetKey.replace('tr-', ''));
-        if (fromIdx === -1 || toIdx === -1) return;
-        const newIds = [...ids];
-        newIds.splice(fromIdx, 1);
-        toIdx = newIds.indexOf(targetKey.replace('tr-', ''));
-        if (toIdx === -1) toIdx = newIds.length - 1;
-        const insertAt = pos === 'after' ? toIdx + 1 : toIdx;
-        newIds.splice(insertAt, 0, drag.id);
-        dispatch({ type: 'REORDER_TASK_ROWS', projectId: drag.projectId!, orderedIds: newIds });
+        // Get all task rows for this project in current visual order
+        const rows = rowsRef.current;
+        const projectTaskRows = rows
+          .filter(r => r.kind === 'taskrow' && r.taskRow.projectId === drag.projectId)
+          .map(r => (r as { kind: 'taskrow'; taskRow: import('../types').TaskRow }).taskRow);
+
+        if (projectTaskRows.length < 2) return;
+
+        // Find drag and target indices in the task-rows-only list
+        const fromIdx = projectTaskRows.findIndex(r => r.id === drag.id);
+        const targetRowId = targetKey.startsWith('tr-') ? targetKey.slice(3) : null;
+        let toIdx = targetRowId ? projectTaskRows.findIndex(r => r.id === targetRowId) : -1;
+
+        if (fromIdx === -1) return;
+
+        // If dropping onto a non-taskrow target, find the nearest taskrow in the flat list
+        if (toIdx === -1) {
+          const flatTargetIdx = rows.findIndex(r => {
+            if (r.kind === 'item')      return r.item.id === targetKey;
+            if (r.kind === 'header')    return r.project.id === targetKey;
+            if (r.kind === 'subheader') return 'sg-' + r.subgroup.id === targetKey;
+            return false;
+          });
+          if (flatTargetIdx === -1) return;
+          // Walk toward the drop position to find closest taskrow
+          if (pos === 'before') {
+            // Find last taskrow before this index
+            for (let i = flatTargetIdx - 1; i >= 0; i--) {
+              const r = rows[i];
+              if (r.kind === 'taskrow' && r.taskRow.projectId === drag.projectId) {
+                toIdx = projectTaskRows.findIndex(tr => tr.id === r.taskRow.id);
+                break;
+              }
+              if (r.kind === 'header') break;
+            }
+            if (toIdx === -1) toIdx = 0; // put at start
+          } else {
+            // Find first taskrow after this index
+            for (let i = flatTargetIdx + 1; i < rows.length; i++) {
+              const r = rows[i];
+              if (r.kind === 'taskrow' && r.taskRow.projectId === drag.projectId) {
+                toIdx = projectTaskRows.findIndex(tr => tr.id === r.taskRow.id);
+                break;
+              }
+              if (r.kind === 'header' && r.project.id !== drag.projectId) break;
+            }
+            if (toIdx === -1) toIdx = projectTaskRows.length - 1; // put at end
+          }
+        }
+
+        if (toIdx === -1 || fromIdx === toIdx) return;
+
+        // Splice and reindex with 1000-gap orders
+        const ids = projectTaskRows.map(r => r.id);
+        ids.splice(fromIdx, 1);
+        const adjustedTo = pos === 'after'
+          ? (fromIdx < toIdx ? toIdx : toIdx + 1)
+          : (fromIdx < toIdx ? toIdx - 1 : toIdx);
+        ids.splice(Math.max(0, Math.min(ids.length, adjustedTo)), 0, drag.id);
+        dispatch({ type: 'REORDER_TASK_ROWS', projectId: drag.projectId!, orderedIds: ids });
       } else {
         // ── Task drag: may be cross-subgroup ────────────────────────────────
         // Determine what the drop target is:
@@ -483,9 +533,16 @@ export default function GanttChart() {
       }
     }
 
-    document.addEventListener('mouseup', commitReorder);
-    return () => document.removeEventListener('mouseup', commitReorder);
-  }, [projects, items, dispatch]);
+    function commitReorderAndCleanup() {
+      commitReorder();
+      // Clear drag state after committing
+      rowDragStateRef.current = null;
+      setRowDragKind(null);
+      setRowDropTarget(null);
+    }
+    document.addEventListener('mouseup', commitReorderAndCleanup);
+    return () => document.removeEventListener('mouseup', commitReorderAndCleanup);
+  }, [projects, items, taskRows, dispatch]);
 
   // ── Flat row list ─────────────────────────────────────────────────────────────
 
@@ -612,6 +669,7 @@ export default function GanttChart() {
     }
     return result;
   }, [projects, subgroups, items, milestoneRows, taskRows]);
+  rowsRef.current = rows;
 
   const columns = useMemo(
     () => viewMode === 'daily' ? buildDailyColumns(calStartDate, numCols) : buildWeeklyColumns(calStartDate, numCols),
@@ -783,8 +841,8 @@ export default function GanttChart() {
           {rows.map((row, rowIndex) => {
             if (row.kind === 'header') {
               const key = row.project.id;
-              const isProjectDrag = rowDragStateRef.current?.kind === 'project';
-              const isTaskDragOnProject = rowDragStateRef.current?.kind === 'task' && rowDropTarget === row.project.id;
+              const isProjectDrag = rowDragKind === 'project';
+              const isTaskDragOnProject = rowDragKind === 'task' && rowDropTarget === row.project.id;
               const showDropBefore = rowDropTarget === key && rowDropPosition === 'before' && isProjectDrag;
               const showDropAfter  = rowDropTarget === key && rowDropPosition === 'after'  && isProjectDrag;
               return (
@@ -815,9 +873,10 @@ export default function GanttChart() {
             if (row.kind === 'item') {
               const key       = row.item.id;
               const projectId = row.project.id;
-              const isDragKindTask = rowDragStateRef.current?.kind === 'task' && rowDragStateRef.current?.projectId === projectId;
-              const showDropBefore = rowDropTarget === key && rowDropPosition === 'before' && isDragKindTask;
-              const showDropAfter  = rowDropTarget === key && rowDropPosition === 'after'  && isDragKindTask;
+              const isDragKindTask    = rowDragKind === 'task' && rowDragStateRef.current?.projectId === projectId;
+              const isDragKindTaskRow = rowDragKind === 'taskrow' && rowDragStateRef.current?.projectId === projectId;
+              const showDropBefore = rowDropTarget === key && rowDropPosition === 'before' && (isDragKindTask || isDragKindTaskRow);
+              const showDropAfter  = rowDropTarget === key && rowDropPosition === 'after'  && (isDragKindTask || isDragKindTaskRow);
               return (
                 <React.Fragment key={key}>
                   {showDropBefore && <DropIndicator color={row.project.color} />}
@@ -836,7 +895,7 @@ export default function GanttChart() {
 
             if (row.kind === 'taskrow') {
               const key = `tr-${row.taskRow.id}`;
-              const isTaskRowDrag = rowDragStateRef.current?.kind === 'taskrow';
+              const isTaskRowDrag = rowDragKind === 'taskrow';
               const showDropBefore = rowDropTarget === key && rowDropPosition === 'before' && isTaskRowDrag;
               const showDropAfter  = rowDropTarget === key && rowDropPosition === 'after'  && isTaskRowDrag;
               return (
@@ -859,7 +918,7 @@ export default function GanttChart() {
 
             if (row.kind === 'subheader') {
               const key = `sg-${row.subgroup.id}`;
-              const isTaskDrag = rowDragStateRef.current?.kind === 'task';
+              const isTaskDrag = rowDragKind === 'task';
               const showDropBefore = rowDropTarget === key && rowDropPosition === 'before' && isTaskDrag;
               const showDropAfter  = rowDropTarget === key && rowDropPosition === 'after'  && isTaskDrag;
               return (
