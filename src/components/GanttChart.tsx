@@ -1640,6 +1640,23 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
   const [desc, setDesc]               = useState(item.description ?? '');
   const [name, setName]               = useState(item.name);
   const [activeColor, setActiveColor] = useState<string | null>(item.color ?? null);
+
+  // Keep local state in sync when the item updates from Firestore
+  // (e.g. another user edits, or our own save echoes back)
+  // Only sync fields the user is NOT actively editing to avoid clobbering in-progress changes
+  const prevItemId = React.useRef(item.id);
+  useEffect(() => {
+    // If the item itself changed (different id) reset all fields
+    if (item.id !== prevItemId.current) {
+      setDesc(item.description ?? "");
+      setName(item.name);
+      setActiveColor(item.color ?? null);
+      prevItemId.current = item.id;
+      return;
+    }
+    // Same item — only sync color (safest field to sync; name/desc user may be typing)
+    setActiveColor(item.color ?? null);
+  }, [item.color, item.id, item.description, item.name]);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const PANEL_W = 420;
