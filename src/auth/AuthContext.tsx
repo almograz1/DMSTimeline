@@ -5,6 +5,17 @@ import {
   type User,
 } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
+import { getFirestore, doc, setDoc } from 'firebase/firestore';
+
+const db = getFirestore();
+
+async function writeUserProfile(user: import('firebase/auth').User) {
+  await setDoc(doc(db, 'userProfiles', user.uid), {
+    uid: user.uid,
+    email: user.email?.toLowerCase() ?? '',
+    displayName: user.displayName ?? '',
+  }, { merge: true });
+}
 
 interface AuthContextValue {
   user: User | null;
@@ -30,15 +41,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signInWithGoogle = async () => {
-    await signInWithPopup(auth, googleProvider);
+    const result = await signInWithPopup(auth, googleProvider);
+    await writeUserProfile(result.user);
   };
 
   const signInWithEmail = async (email: string, password: string) => {
-    await signInWithEmailAndPassword(auth, email, password);
+    const result = await signInWithEmailAndPassword(auth, email, password);
+    await writeUserProfile(result.user);
   };
 
   const createAccount = async (email: string, password: string) => {
-    await createUserWithEmailAndPassword(auth, email, password);
+    const result = await createUserWithEmailAndPassword(auth, email, password);
+    await writeUserProfile(result.user);
   };
 
   const logout = async () => {

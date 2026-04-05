@@ -113,14 +113,22 @@ function reducer(state: GanttState, action: Action): GanttState {
     }
     case 'ADD_SUBGROUP':
       return { ...state, subgroups: [...state.subgroups, action.subgroup] };
-    case 'DELETE_SUBGROUP':
+    case 'DELETE_SUBGROUP': {
+      const topItems   = state.items.filter(i => !i.subgroupId);
+      const maxOrder   = topItems.length > 0 ? Math.max(...topItems.map(i => i.order ?? 0)) : 0;
+      let offset = 0;
       return {
         ...state,
         subgroups: state.subgroups.filter(s => s.id !== action.subgroupId),
-        items: state.items.map(item =>
-          item.subgroupId === action.subgroupId ? { ...item, subgroupId: null } : item
-        ),
+        items: state.items.map(item => {
+          if (item.subgroupId === action.subgroupId) {
+            offset += 1000;
+            return { ...item, subgroupId: null, order: maxOrder + offset };
+          }
+          return item;
+        }),
       };
+    }
     case 'TOGGLE_SUBGROUP_COLLAPSE':
       return {
         ...state,
@@ -229,30 +237,29 @@ export function GanttProvider({ children }: { children: React.ReactNode }) {
     const tid = activeTimeline.id;
 
     const unsubProjects = onSnapshot(
-      query(collection(db, PROJECTS_COL), where('userId', '==', uid)),
-      snapshot => { const all = snapshot.docs.map(d => d.data() as Project); dispatch({ type: 'LOAD_PROJECTS', projects: all.filter(p => p.timelineId === tid) }); markLoaded(); },
+      query(collection(db, PROJECTS_COL), where('timelineId', '==', tid)),
+      snapshot => { dispatch({ type: 'LOAD_PROJECTS', projects: snapshot.docs.map(d => d.data() as Project) }); markLoaded(); },
       err => { console.error('projects:', err); markLoaded(); }
     );
     const unsubSubgroups = onSnapshot(
-      query(collection(db, SUBGROUPS_COL), where('userId', '==', uid)),
-      snapshot => { const all = snapshot.docs.map(d => d.data() as Subgroup); dispatch({ type: 'LOAD_SUBGROUPS', subgroups: all.filter(s => s.timelineId === tid) }); markLoaded(); },
+      query(collection(db, SUBGROUPS_COL), where('timelineId', '==', tid)),
+      snapshot => { dispatch({ type: 'LOAD_SUBGROUPS', subgroups: snapshot.docs.map(d => d.data() as Subgroup) }); markLoaded(); },
       err => { console.error('subgroups:', err); markLoaded(); }
     );
     const unsubItems = onSnapshot(
-      query(collection(db, ITEMS_COL), where('userId', '==', uid)),
-      snapshot => { const all = snapshot.docs.map(d => d.data() as GanttItem); dispatch({ type: 'LOAD_ITEMS', items: all.filter(i => i.timelineId === tid) }); markLoaded(); },
+      query(collection(db, ITEMS_COL), where('timelineId', '==', tid)),
+      snapshot => { dispatch({ type: 'LOAD_ITEMS', items: snapshot.docs.map(d => d.data() as GanttItem) }); markLoaded(); },
       err => { console.error('items:', err); markLoaded(); }
     );
     const unsubVacations = onSnapshot(
-      query(collection(db, VACATIONS_COL), where('userId', '==', uid)),
-      snapshot => { const all = snapshot.docs.map(d => d.data() as VacationPeriod); dispatch({ type: 'LOAD_VACATIONS', vacations: all.filter(v => v.timelineId === tid) }); },
+      query(collection(db, VACATIONS_COL), where('timelineId', '==', tid)),
+      snapshot => { dispatch({ type: 'LOAD_VACATIONS', vacations: snapshot.docs.map(d => d.data() as VacationPeriod) }); },
       err => { console.error('vacations:', err); }
     );
     const unsubMilestoneRows = onSnapshot(
-      query(collection(db, MILESTONE_ROWS_COL), where('userId', '==', uid)),
+      query(collection(db, MILESTONE_ROWS_COL), where('timelineId', '==', tid)),
       snapshot => {
-        const all = snapshot.docs.map(d => d.data() as MilestoneRow);
-        dispatch({ type: 'LOAD_MILESTONE_ROWS', milestoneRows: all.filter(r => r.timelineId === tid) });
+        dispatch({ type: 'LOAD_MILESTONE_ROWS', milestoneRows: snapshot.docs.map(d => d.data() as MilestoneRow) });
       },
       err => { console.error('milestoneRows:', err); }
     );

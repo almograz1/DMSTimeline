@@ -436,9 +436,14 @@ export default function GanttChart() {
           if (targetTask) newSubgroupId = targetTask.subgroupId ?? null;
         }
 
-        // If subgroup changed, update the item first
+        // If subgroup changed, update the item — also assign a new order so it
+        // doesn't collide with items already in the destination group
         if (newSubgroupId !== undefined && newSubgroupId !== (drag.subgroupId ?? null)) {
-          dispatch({ type: 'UPDATE_ITEM', itemId: drag.id, patch: { subgroupId: newSubgroupId } });
+          const destItems = items.filter(i =>
+            i.projectId === drag.projectId && (i.subgroupId ?? null) === newSubgroupId && i.id !== drag.id
+          );
+          const maxOrder = destItems.length > 0 ? Math.max(...destItems.map(i => i.order ?? 0)) : -1000;
+          dispatch({ type: 'UPDATE_ITEM', itemId: drag.id, patch: { subgroupId: newSubgroupId, order: maxOrder + 1000 } });
         }
 
         // Only reorder if dropping onto a sibling task (not a header)
@@ -487,24 +492,27 @@ export default function GanttChart() {
       project: Project,
       subgroup?: Subgroup
     ) {
-      const tasks      = projectItems.filter(i => i.type === 'task')      as GanttTask[];
-      const milestones = projectItems.filter(i => i.type === 'milestone') as GanttMilestone[];
+      const tasks      = (projectItems.filter(i => i.type === 'task')      as GanttTask[]).sort((a,b) => (a.order??0)-(b.order??0));
+      const milestones = (projectItems.filter(i => i.type === 'milestone') as GanttMilestone[]).sort((a,b) => (a.order??0)-(b.order??0));
       for (const task of tasks) result.push({ kind: 'item', item: task, project, subgroup });
 
       const projectMilestoneRows = milestoneRows.filter(r => r.projectId === project.id);
 
       if (projectMilestoneRows.length === 0) {
-        // No named rows defined → single default row (backwards compatible)
+        // No named rows defined → single default row
         if (milestones.length > 0) result.push({ kind: 'milestones', milestones, project, subgroup });
       } else {
-        // One row per defined milestone row type
+        // One row per named milestone row — only show if it has milestones
         for (const mRow of projectMilestoneRows) {
           const rowMilestones = milestones.filter(m => m.milestoneRowId === mRow.id);
-          // Always show the row (so users can place into it), even if empty
-          result.push({ kind: 'milestones', milestones: rowMilestones, project, subgroup, milestoneRow: mRow });
+          // Only render the row if it has milestones (avoids empty ghost rows)
+          if (rowMilestones.length > 0) {
+            result.push({ kind: 'milestones', milestones: rowMilestones, project, subgroup, milestoneRow: mRow });
+          }
         }
-        // Fallback row for milestones not assigned to any named row
-        const unassigned = milestones.filter(m => !m.milestoneRowId);
+        // Fallback: milestones not assigned to any named row (or with stale milestoneRowId)
+        const validRowIds = new Set(projectMilestoneRows.map(r => r.id));
+        const unassigned = milestones.filter(m => !m.milestoneRowId || !validRowIds.has(m.milestoneRowId));
         if (unassigned.length > 0) {
           result.push({ kind: 'milestones', milestones: unassigned, project, subgroup });
         }
@@ -516,16 +524,41 @@ export default function GanttChart() {
       if (project.collapsed) continue;
 
       const projectSubgroups = subgroups.filter(s => s.projectId === project.id);
+      // Build a set of valid subgroup IDs for this project to catch orphaned items
+      const validSgIds = new Set(projectSubgroups.map(s => s.id));
 
-      const topItems = items.filter(i => i.projectId === project.id && !i.subgroupId);
-      pushItems(topItems, project);
+      // Top-level tasks first (no subgroup or orphaned) — before subgroups
+      const isTopLevel = (i: typeof items[0]) =>
+        i.projectId === project.id && (!i.subgroupId || !validSgIds.has(i.subgroupId));
 
+      const topTasks = (items.filter(i => isTopLevel(i) && i.type === 'task') as GanttTask[])
+        .sort((a,b) => (a.order??0)-(b.order??0));
+      for (const task of topTasks) result.push({ kind: 'item', item: task, project });
+
+      // Subgroups (with their own tasks + milestone rows inside)
       for (const sg of projectSubgroups) {
         result.push({ kind: 'subheader', subgroup: sg, project });
         if (!sg.collapsed) {
           const sgItems = items.filter(i => i.projectId === project.id && i.subgroupId === sg.id);
           pushItems(sgItems, project, sg);
         }
+      }
+
+      // Project-level milestone rows render LAST (after all tasks and subgroups)
+      const topMilestones = (items.filter(i => isTopLevel(i) && i.type === 'milestone') as GanttMilestone[])
+        .sort((a,b) => (a.order??0)-(b.order??0));
+      const projectMilestoneRows = milestoneRows.filter(r => r.projectId === project.id);
+      if (projectMilestoneRows.length === 0) {
+        if (topMilestones.length > 0) result.push({ kind: 'milestones', milestones: topMilestones, project });
+      } else {
+        for (const mRow of projectMilestoneRows) {
+          const rowMilestones = topMilestones.filter(m => m.milestoneRowId === mRow.id);
+          if (rowMilestones.length > 0)
+            result.push({ kind: 'milestones', milestones: rowMilestones, project, milestoneRow: mRow });
+        }
+        const validRowIds = new Set(projectMilestoneRows.map(r => r.id));
+        const unassigned = topMilestones.filter(m => !m.milestoneRowId || !validRowIds.has(m.milestoneRowId));
+        if (unassigned.length > 0) result.push({ kind: 'milestones', milestones: unassigned, project });
       }
     }
     return result;
@@ -1293,43 +1326,74 @@ function LeftPanelMilestonesRow({ row, rowH, isHovered, onHover, onDeleteMilesto
   const { milestones, project, milestoneRow } = row;
   const rowKey        = `ms-${project.id}-${row.subgroup?.id ?? 'top'}-${milestoneRow?.id ?? 'default'}`;
   const unplacedCount = milestones.filter(m => m.date === null).length;
+  const placedCount   = milestones.filter(m => m.date !== null).length;
   const icon          = milestoneRow?.icon ?? '◆';
   const label         = milestoneRow?.name ?? 'Milestones';
 
+  // Single fixed-height row — no list of names (they show on the calendar as labels)
+  // On hover show a tooltip-style popup listing names instead of expanding the row
+  const [showTooltip, setShowTooltip] = useState(false);
+
   return (
     <div
-      style={{ height: rowH, display: 'flex', flexDirection: 'column', justifyContent: 'center', paddingLeft: 28, paddingRight: 8, background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)', borderBottom: '1px solid var(--border)', transition: 'background 0.1s', gap: 3 }}
-      onMouseEnter={() => onHover(rowKey)}
-      onMouseLeave={() => onHover(null)}
+      style={{ height: rowH, display: 'flex', alignItems: 'center', paddingLeft: 28, paddingRight: 8, gap: 6, position: 'relative',
+        background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)', borderBottom: '1px solid var(--border)', transition: 'background 0.1s' }}
+      onMouseEnter={() => { onHover(rowKey); setShowTooltip(true); }}
+      onMouseLeave={() => { onHover(null); setShowTooltip(false); }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-        <span style={{ fontSize: 11, flexShrink: 0 }}>{icon}</span>
-        <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)' }}>{label}</span>
-        {unplacedCount > 0 && (
-          <span style={{ fontSize: 10, fontWeight: 600, color: project.color, background: project.color + '18', border: `1px solid ${project.color}40`, borderRadius: 10, padding: '0px 6px' }}>
-            {unplacedCount} to place
+      {/* Icon */}
+      <span style={{ fontSize: 12, flexShrink: 0 }}>{icon}</span>
+
+      {/* Label */}
+      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {label}
+      </span>
+
+      {/* Count badges */}
+      <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+        {placedCount > 0 && (
+          <span style={{ fontSize: 10, fontWeight: 600, color: project.color, background: project.color + '18', borderRadius: 10, padding: '1px 6px' }}>
+            {placedCount}
           </span>
         )}
-        {isHovered && onDeleteRow && (
-          <button
-            onClick={e => { e.stopPropagation(); if (window.confirm('Delete this milestone row? Milestones will move to default.')) onDeleteRow(); }}
-            title="Delete this milestone row"
-            style={{ marginLeft: 'auto', width: 16, height: 16, borderRadius: 3, background: '#fee2e2', color: '#ef4444', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
-          >×</button>
+        {unplacedCount > 0 && (
+          <span style={{ fontSize: 10, fontWeight: 600, color: '#f59e0b', background: '#fef3c7', borderRadius: 10, padding: '1px 6px' }}>
+            +{unplacedCount}
+          </span>
         )}
       </div>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 1, paddingLeft: 17 }}>
-        {milestones.map(m => (
-          <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-            <span style={{ fontSize: 10, color: m.date ? 'var(--text-primary)' : 'var(--text-muted)', fontStyle: m.date ? 'normal' : 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>
-              {m.name}{!m.date ? ' (unplaced)' : ''}
-            </span>
-            {isHovered && (
-              <button onClick={() => onDeleteMilestone(m.id)} style={{ width: 14, height: 14, borderRadius: 3, background: '#fee2e2', color: '#ef4444', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>×</button>
-            )}
-          </div>
-        ))}
-      </div>
+
+      {/* Delete row button */}
+      {isHovered && onDeleteRow && (
+        <button
+          onClick={e => { e.stopPropagation(); if (window.confirm('Delete this milestone row?')) onDeleteRow(); }}
+          style={{ width: 16, height: 16, borderRadius: 3, background: '#fee2e2', color: '#ef4444', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
+        >×</button>
+      )}
+
+      {/* Hover tooltip listing milestone names + delete buttons */}
+      {showTooltip && milestones.length > 0 && (
+        <div style={{
+          position: 'absolute', left: '100%', top: 0, zIndex: 50,
+          background: 'var(--bg-surface)', border: '1px solid var(--border)',
+          borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
+          padding: '8px 0', minWidth: 200, maxWidth: 280,
+        }}>
+          {milestones.map(m => (
+            <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 12px' }}
+              onMouseEnter={e => e.stopPropagation()}
+            >
+              <span style={{ fontSize: 10, flexShrink: 0, opacity: 0.6 }}>{icon}</span>
+              <span style={{ fontSize: 11, flex: 1, color: m.date ? 'var(--text-primary)' : 'var(--text-muted)',
+                fontStyle: m.date ? 'normal' : 'italic', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {m.name}{!m.date ? ' (unplaced)' : ''}
+              </span>
+              <button onClick={() => onDeleteMilestone(m.id)}
+                style={{ width: 14, height: 14, borderRadius: 3, background: '#fee2e2', color: '#ef4444', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

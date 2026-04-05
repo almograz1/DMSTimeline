@@ -8,14 +8,16 @@ import AddItemModal from './components/AddItemModal';
 import AddSubgroupModal from './components/AddSubgroupModal';
 import AddMilestoneRowModal from './components/AddMilestoneRowModal';
 import LoginPage from './auth/LoginPage';
+import ShareModal from './auth/ShareModal';
 import './index.css';
 
 // ─── Timeline Selector + Create ───────────────────────────────────────────────
 
 function TimelineSelector() {
   const { timelines, activeTimeline, setActiveTimelineId, createTimeline, deleteTimeline } = useTimeline();
-  const [creating, setCreating] = useState(false);
-  const [newName, setNewName]   = useState('');
+  const [creating, setCreating]   = useState(false);
+  const [newName, setNewName]     = useState('');
+  const [showShare, setShowShare] = useState(false);
 
   async function handleCreate() {
     const name = newName.trim();
@@ -26,6 +28,7 @@ function TimelineSelector() {
   }
 
   return (
+    <>
     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
       {/* Timeline dropdown */}
       <select
@@ -49,6 +52,15 @@ function TimelineSelector() {
           </option>
         ))}
       </select>
+
+      {/* Share current timeline */}
+      {activeTimeline && (
+        <button
+          title="Share this timeline"
+          onClick={() => setShowShare(true)}
+          style={{ width: 22, height: 22, borderRadius: 5, background: 'rgba(255,255,255,0.1)', color: 'rgba(255,255,255,0.8)', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >🔗</button>
+      )}
 
       {/* Delete current timeline */}
       {activeTimeline && timelines.length > 1 && (
@@ -89,6 +101,8 @@ function TimelineSelector() {
         >＋</button>
       )}
     </div>
+    {showShare && activeTimeline && <ShareModal timeline={activeTimeline} onClose={() => setShowShare(false)} />}
+    </>
   );
 }
 
