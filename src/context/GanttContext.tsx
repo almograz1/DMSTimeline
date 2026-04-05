@@ -8,13 +8,14 @@ import {
   writeBatch, query, where,
 } from 'firebase/firestore';
 import { db } from '../firebase';
-import type { Project, Subgroup, GanttItem, GanttTask, GanttMilestone, ViewMode, VacationPeriod } from '../types';
+import type { Project, Subgroup, MilestoneRow, GanttItem, GanttTask, GanttMilestone, ViewMode, VacationPeriod } from '../types';
 import { formatDate, defaultCalendarWindow, addDays, parseDate } from '../utils/dateUtils';
 import { useAuth } from '../auth/AuthContext';
 import { useTimeline } from '../auth/TimelineContext';
 
 const PROJECTS_COL  = 'projects';
-const VACATIONS_COL = 'vacations';
+const VACATIONS_COL      = 'vacations';
+const MILESTONE_ROWS_COL = 'milestoneRows';
 const SUBGROUPS_COL = 'subgroups';
 const ITEMS_COL     = 'items';
 
@@ -36,6 +37,7 @@ interface GanttState {
   subgroups: Subgroup[];
   items: GanttItem[];
   vacations: VacationPeriod[];
+  milestoneRows: MilestoneRow[];
   viewMode: ViewMode;
   calendarStart: string;
   calendarDays: number;
@@ -59,6 +61,9 @@ type Action =
   | { type: 'UPDATE_ITEM';             itemId: string; patch: Partial<GanttTask> | Partial<GanttMilestone> }
   | { type: 'DELETE_ITEM';             itemId: string }
   | { type: 'LOAD_VACATIONS';          vacations: VacationPeriod[] }
+  | { type: 'LOAD_MILESTONE_ROWS';    milestoneRows: MilestoneRow[] }
+  | { type: 'ADD_MILESTONE_ROW';      milestoneRow: MilestoneRow }
+  | { type: 'DELETE_MILESTONE_ROW';   milestoneRowId: string }
   | { type: 'ADD_VACATION';            vacation: VacationPeriod }
   | { type: 'DELETE_VACATION';         vacationId: string }
   | { type: 'SET_VIEW_MODE';           viewMode: ViewMode }
@@ -139,6 +144,21 @@ function reducer(state: GanttState, action: Action): GanttState {
       return { ...state, vacations: [...state.vacations, action.vacation] };
     case 'DELETE_VACATION':
       return { ...state, vacations: state.vacations.filter(v => v.id !== action.vacationId) };
+    case 'LOAD_MILESTONE_ROWS':
+      return { ...state, milestoneRows: [...action.milestoneRows].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) };
+    case 'ADD_MILESTONE_ROW':
+      return { ...state, milestoneRows: [...state.milestoneRows, action.milestoneRow] };
+    case 'DELETE_MILESTONE_ROW':
+      return {
+        ...state,
+        milestoneRows: state.milestoneRows.filter(r => r.id !== action.milestoneRowId),
+        // Unassign milestones from the deleted row (move to default)
+        items: state.items.map(item =>
+          item.type === 'milestone' && item.milestoneRowId === action.milestoneRowId
+            ? { ...item, milestoneRowId: null }
+            : item
+        ),
+      };
     case 'SET_VIEW_MODE':
       return { ...state, viewMode: action.viewMode };
     case 'PAN_CALENDAR': {
@@ -156,7 +176,7 @@ function reducer(state: GanttState, action: Action): GanttState {
 function buildInitialState(): GanttState {
   const { startDate, totalDays } = defaultCalendarWindow();
   return {
-    projects: [], subgroups: [], items: [], vacations: [],
+    projects: [], subgroups: [], items: [], vacations: [], milestoneRows: [],
     viewMode: 'weekly',
     calendarStart: formatDate(startDate),
     calendarDays: totalDays,
@@ -209,27 +229,35 @@ export function GanttProvider({ children }: { children: React.ReactNode }) {
     const tid = activeTimeline.id;
 
     const unsubProjects = onSnapshot(
-      query(collection(db, PROJECTS_COL), where('userId', '==', uid), where('timelineId', '==', tid)),
-      snapshot => { dispatch({ type: 'LOAD_PROJECTS', projects: snapshot.docs.map(d => d.data() as Project) }); markLoaded(); },
+      query(collection(db, PROJECTS_COL), where('userId', '==', uid)),
+      snapshot => { const all = snapshot.docs.map(d => d.data() as Project); dispatch({ type: 'LOAD_PROJECTS', projects: all.filter(p => p.timelineId === tid) }); markLoaded(); },
       err => { console.error('projects:', err); markLoaded(); }
     );
     const unsubSubgroups = onSnapshot(
-      query(collection(db, SUBGROUPS_COL), where('userId', '==', uid), where('timelineId', '==', tid)),
-      snapshot => { dispatch({ type: 'LOAD_SUBGROUPS', subgroups: snapshot.docs.map(d => d.data() as Subgroup) }); markLoaded(); },
+      query(collection(db, SUBGROUPS_COL), where('userId', '==', uid)),
+      snapshot => { const all = snapshot.docs.map(d => d.data() as Subgroup); dispatch({ type: 'LOAD_SUBGROUPS', subgroups: all.filter(s => s.timelineId === tid) }); markLoaded(); },
       err => { console.error('subgroups:', err); markLoaded(); }
     );
     const unsubItems = onSnapshot(
-      query(collection(db, ITEMS_COL), where('userId', '==', uid), where('timelineId', '==', tid)),
-      snapshot => { dispatch({ type: 'LOAD_ITEMS', items: snapshot.docs.map(d => d.data() as GanttItem) }); markLoaded(); },
+      query(collection(db, ITEMS_COL), where('userId', '==', uid)),
+      snapshot => { const all = snapshot.docs.map(d => d.data() as GanttItem); dispatch({ type: 'LOAD_ITEMS', items: all.filter(i => i.timelineId === tid) }); markLoaded(); },
       err => { console.error('items:', err); markLoaded(); }
     );
     const unsubVacations = onSnapshot(
-      query(collection(db, VACATIONS_COL), where('userId', '==', uid), where('timelineId', '==', tid)),
-      snapshot => { dispatch({ type: 'LOAD_VACATIONS', vacations: snapshot.docs.map(d => d.data() as VacationPeriod) }); },
+      query(collection(db, VACATIONS_COL), where('userId', '==', uid)),
+      snapshot => { const all = snapshot.docs.map(d => d.data() as VacationPeriod); dispatch({ type: 'LOAD_VACATIONS', vacations: all.filter(v => v.timelineId === tid) }); },
       err => { console.error('vacations:', err); }
     );
+    const unsubMilestoneRows = onSnapshot(
+      query(collection(db, MILESTONE_ROWS_COL), where('userId', '==', uid)),
+      snapshot => {
+        const all = snapshot.docs.map(d => d.data() as MilestoneRow);
+        dispatch({ type: 'LOAD_MILESTONE_ROWS', milestoneRows: all.filter(r => r.timelineId === tid) });
+      },
+      err => { console.error('milestoneRows:', err); }
+    );
 
-    return () => { unsubProjects(); unsubSubgroups(); unsubItems(); unsubVacations(); };
+    return () => { unsubProjects(); unsubSubgroups(); unsubItems(); unsubVacations(); unsubMilestoneRows(); };
   }, [user, activeTimeline]);
 
   // ── Local → Firestore ────────────────────────────────────────────────────────
@@ -256,6 +284,10 @@ export function GanttProvider({ children }: { children: React.ReactNode }) {
     }
     if (action.type === 'ADD_VACATION') {
       action = { ...action, vacation: { ...(action as { vacation: import('../types').VacationPeriod }).vacation, userId: uid, timelineId: tid } };
+    }
+    if (action.type === 'ADD_MILESTONE_ROW') {
+      const siblings = state.milestoneRows.filter(r => r.projectId === (action as { milestoneRow: MilestoneRow }).milestoneRow.projectId);
+      action = { ...action, milestoneRow: { ...(action as { milestoneRow: MilestoneRow }).milestoneRow, userId: uid, timelineId: tid, order: nextOrder(siblings) } };
     }
 
     lastActionRef.current = action;
@@ -334,6 +366,19 @@ async function syncToFirestore(action: Action, state: GanttState): Promise<void>
     case 'DELETE_VACATION':
       await deleteDoc(doc(db, VACATIONS_COL, action.vacationId));
       break;
+    case 'ADD_MILESTONE_ROW':
+      await setDoc(doc(db, MILESTONE_ROWS_COL, action.milestoneRow.id), action.milestoneRow);
+      break;
+    case 'DELETE_MILESTONE_ROW': {
+      await deleteDoc(doc(db, MILESTONE_ROWS_COL, action.milestoneRowId));
+      // Update unassigned milestones in Firestore
+      const batch = writeBatch(db);
+      for (const item of state.items.filter(i => i.type === 'milestone' && i.milestoneRowId === action.milestoneRowId))
+        batch.set(doc(db, ITEMS_COL, item.id), { milestoneRowId: null }, { merge: true });
+      if (state.items.some(i => i.type === 'milestone' && i.milestoneRowId === action.milestoneRowId))
+        await batch.commit();
+      break;
+    }
     case 'ADD_ITEM':
       await setDoc(doc(db, ITEMS_COL, action.item.id), action.item);
       break;

@@ -6,6 +6,7 @@ import GanttChart from './components/GanttChart';
 import AddProjectModal from './components/AddProjectModal';
 import AddItemModal from './components/AddItemModal';
 import AddSubgroupModal from './components/AddSubgroupModal';
+import AddMilestoneRowModal from './components/AddMilestoneRowModal';
 import LoginPage from './auth/LoginPage';
 import './index.css';
 
@@ -147,8 +148,8 @@ function UserMenu() {
 
 // ─── Toolbar ──────────────────────────────────────────────────────────────────
 
-function Toolbar({ onAddProject, onAddSubgroup, onAddTask, onAddMilestone }: {
-  onAddProject: () => void; onAddSubgroup: () => void;
+function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTask, onAddMilestone }: {
+  onAddProject: () => void; onAddSubgroup: () => void; onAddMilestoneRow: () => void;
   onAddTask: () => void; onAddMilestone: () => void;
 }) {
   const { state, dispatch } = useGantt();
@@ -179,9 +180,10 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddTask, onAddMilestone }: {
       <TBtn onClick={onAddProject}  icon="＋" label="Swim Lane" accent />
       {hasProjects && (
         <>
-          <TBtn onClick={onAddSubgroup} icon="▤" label="Subgroup" />
-          <TBtn onClick={onAddTask}     icon="▬" label="Task" />
-          <TBtn onClick={onAddMilestone} icon="◆" label="Milestone" />
+          <TBtn onClick={onAddSubgroup}     icon="▤" label="Subgroup" />
+          <TBtn onClick={onAddMilestoneRow} icon="◆" label="M. Row" />
+          <TBtn onClick={onAddTask}         icon="▬" label="Task" />
+          <TBtn onClick={onAddMilestone}    icon="◇" label="Milestone" />
         </>
       )}
 
@@ -283,7 +285,7 @@ function NoTimelines() {
 
 // ─── Main App Inner ───────────────────────────────────────────────────────────
 
-type ModalType = 'project' | 'subgroup' | 'task' | 'milestone' | null;
+type ModalType = 'project' | 'subgroup' | 'milestoneRow' | 'task' | 'milestone' | null;
 
 function AppInner() {
   const [modal, setModal]           = useState<ModalType>(null);
@@ -307,6 +309,7 @@ function AppInner() {
       <Toolbar
         onAddProject={() => setModal('project')}
         onAddSubgroup={() => setModal('subgroup')}
+        onAddMilestoneRow={() => setModal('milestoneRow')}
         onAddTask={() => setModal('task')}
         onAddMilestone={() => setModal('milestone')}
       />
@@ -318,7 +321,8 @@ function AppInner() {
       )}
 
       {modal === 'project'   && <AddProjectModal onClose={() => setModal(null)} />}
-      {modal === 'subgroup'  && <AddSubgroupModal onClose={() => setModal(null)} />}
+      {modal === 'subgroup'     && <AddSubgroupModal onClose={() => setModal(null)} />}
+      {modal === 'milestoneRow' && <AddMilestoneRowModal onClose={() => setModal(null)} />}
       {modal === 'task'      && <AddItemModal itemType="task"      onClose={() => setModal(null)} />}
       {modal === 'milestone' && <AddItemModal itemType="milestone" onClose={() => setModal(null)} />}
     </div>

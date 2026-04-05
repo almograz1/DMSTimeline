@@ -12,14 +12,16 @@ export default function AddItemModal({ defaultProjectId, itemType, onClose }: Pr
   const { state, dispatch, genId } = useGantt();
   const [name, setName]           = useState('');
   const [projectId, setProjectId] = useState(defaultProjectId ?? state.projects[0]?.id ?? '');
-  const [subgroupId, setSubgroupId] = useState<string>('');
+  const [subgroupId, setSubgroupId]       = useState<string>('');
+  const [milestoneRowId, setMilestoneRowId] = useState<string>('');
   const inputRef = useRef<HTMLInputElement>(null);
 
   // Subgroups that belong to the currently selected project
-  const availableSubgroups = state.subgroups.filter(s => s.projectId === projectId);
+  const availableSubgroups   = state.subgroups.filter(s => s.projectId === projectId);
+  const availableMilestoneRows = state.milestoneRows.filter(r => r.projectId === projectId);
 
   // Reset subgroup selection when project changes
-  useEffect(() => { setSubgroupId(''); }, [projectId]);
+  useEffect(() => { setSubgroupId(''); setMilestoneRowId(''); }, [projectId]);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
@@ -52,6 +54,7 @@ export default function AddItemModal({ defaultProjectId, itemType, onClose }: Pr
         item: {
           id: genId(), type: 'milestone',
           projectId, subgroupId: sgId,
+          milestoneRowId: milestoneRowId || null,
           name: trimmed,
           date: null,
           order: 0,
@@ -116,6 +119,24 @@ export default function AddItemModal({ defaultProjectId, itemType, onClose }: Pr
               <option value="">— No subgroup (top-level) —</option>
               {availableSubgroups.map(s => (
                 <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Milestone row selector */}
+        {itemType === 'milestone' && availableMilestoneRows.length > 0 && (
+          <div className="form-group">
+            <label className="form-label">Milestone Row <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>(optional)</span></label>
+            <select
+              className="form-input"
+              value={milestoneRowId}
+              onChange={e => setMilestoneRowId(e.target.value)}
+              style={{ appearance: 'auto' }}
+            >
+              <option value="">— Default row —</option>
+              {availableMilestoneRows.map(r => (
+                <option key={r.id} value={r.id}>{r.icon} {r.name}</option>
               ))}
             </select>
           </div>
