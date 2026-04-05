@@ -1641,22 +1641,18 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
   const [name, setName]               = useState(item.name);
   const [activeColor, setActiveColor] = useState<string | null>(item.color ?? null);
 
-  // Keep local state in sync when the item updates from Firestore
-  // (e.g. another user edits, or our own save echoes back)
-  // Only sync fields the user is NOT actively editing to avoid clobbering in-progress changes
+  // Only reset local state when a DIFFERENT item is opened.
+  // Never sync from Firestore echoes while the panel is open — the user's
+  // in-panel selection is the source of truth until they save or close.
   const prevItemId = React.useRef(item.id);
   useEffect(() => {
-    // If the item itself changed (different id) reset all fields
     if (item.id !== prevItemId.current) {
       setDesc(item.description ?? "");
       setName(item.name);
       setActiveColor(item.color ?? null);
       prevItemId.current = item.id;
-      return;
     }
-    // Same item — only sync color (safest field to sync; name/desc user may be typing)
-    setActiveColor(item.color ?? null);
-  }, [item.color, item.id, item.description, item.name]);
+  }, [item.id]);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const PANEL_W = 420;
@@ -1791,7 +1787,7 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
               <button
                 key={i}
                 title={c === null ? 'Use project color (default)' : c}
-                onClick={() => setActiveColor(c)}
+                onClick={() => { setActiveColor(c); onSaveColor(c); }}
                 style={{
                   width: 22, height: 22, borderRadius: 5,
                   background: swatchColor,
