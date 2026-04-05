@@ -495,20 +495,23 @@ export default function GanttChart() {
       const allTasks   = (projectItems.filter(i => i.type === 'task')      as GanttTask[]).sort((a,b) => (a.order??0)-(b.order??0));
       const milestones = (projectItems.filter(i => i.type === 'milestone') as GanttMilestone[]).sort((a,b) => (a.order??0)-(b.order??0));
 
-      // Tasks in named task rows → grouped onto one calendar line each
-      const sgTaskRows = taskRows.filter(r =>
-        r.projectId === project.id && (r.subgroupId ?? null) === (subgroup?.id ?? null)
-      );
-      const validTaskRowIds = new Set(sgTaskRows.map(r => r.id));
+      // All project task rows (project-wide, not scoped to subgroup)
+      const allProjectTaskRows  = taskRows.filter(r => r.projectId === project.id);
+      const validTaskRowIds     = new Set(allProjectTaskRows.map(r => r.id));
 
-      // Independent tasks (no taskRowId or stale taskRowId)
+      // Independent tasks: no taskRowId, or stale taskRowId
       const independentTasks = allTasks.filter(t => !t.taskRowId || !validTaskRowIds.has(t.taskRowId));
       for (const task of independentTasks) result.push({ kind: 'item', item: task, project, subgroup });
 
-      // Named task rows
-      for (const tRow of sgTaskRows) {
-        const rowTasks = allTasks.filter(t => t.taskRowId === tRow.id);
-        result.push({ kind: 'taskrow', tasks: rowTasks, project, subgroup, taskRow: tRow });
+      // Named task rows — only rendered at top level (not inside subgroups) to avoid duplication
+      if (!subgroup) {
+        for (const tRow of allProjectTaskRows) {
+          // Collect tasks from ALL subgroups that are assigned to this row
+          const rowTasks = items.filter(i =>
+            i.projectId === project.id && i.type === 'task' && i.taskRowId === tRow.id
+          ).sort((a,b) => (a.order??0)-(b.order??0)) as GanttTask[];
+          result.push({ kind: 'taskrow', tasks: rowTasks, project, taskRow: tRow });
+        }
       }
 
       const tasks = allTasks; // alias for milestone section below
@@ -544,13 +547,19 @@ export default function GanttChart() {
       // Build a set of valid subgroup IDs for this project to catch orphaned items
       const validSgIds = new Set(projectSubgroups.map(s => s.id));
 
-      // Top-level tasks first (no subgroup or orphaned) — before subgroups
       const isTopLevel = (i: typeof items[0]) =>
         i.projectId === project.id && (!i.subgroupId || !validSgIds.has(i.subgroupId));
 
-      const topTasks = (items.filter(i => isTopLevel(i) && i.type === 'task') as GanttTask[])
-        .sort((a,b) => (a.order??0)-(b.order??0));
-      for (const task of topTasks) result.push({ kind: 'item', item: task, project });
+      // Task rows for this project
+      const projectTaskRows = taskRows.filter(r => r.projectId === project.id);
+      const validTaskRowIds = new Set(projectTaskRows.map(r => r.id));
+
+      // Independent top-level tasks (no taskRowId or stale taskRowId, no subgroup)
+      const topIndependentTasks = (items.filter(i =>
+        isTopLevel(i) && i.type === 'task' &&
+        (!i.taskRowId || !validTaskRowIds.has(i.taskRowId))
+      ) as GanttTask[]).sort((a,b) => (a.order??0)-(b.order??0));
+      for (const task of topIndependentTasks) result.push({ kind: 'item', item: task, project });
 
       // Subgroups (with their own tasks + milestone rows inside)
       for (const sg of projectSubgroups) {
@@ -561,7 +570,16 @@ export default function GanttChart() {
         }
       }
 
-      // Project-level milestone rows render LAST (after all tasks and subgroups)
+      // Named task rows — collect ALL tasks (across subgroups) assigned to each row
+      for (const tRow of projectTaskRows) {
+        const rowTasks = (items.filter(i =>
+          i.projectId === project.id && i.type === 'task' && i.taskRowId === tRow.id
+        ) as GanttTask[]).sort((a,b) => (a.order??0)-(b.order??0));
+        // Always show the row so tasks can be placed into it
+        result.push({ kind: 'taskrow', tasks: rowTasks, project, taskRow: tRow });
+      }
+
+      // Project-level milestone rows render LAST
       const topMilestones = (items.filter(i => isTopLevel(i) && i.type === 'milestone') as GanttMilestone[])
         .sort((a,b) => (a.order??0)-(b.order??0));
       const projectMilestoneRows = milestoneRows.filter(r => r.projectId === project.id);
@@ -579,7 +597,7 @@ export default function GanttChart() {
       }
     }
     return result;
-  }, [projects, subgroups, items, milestoneRows]);
+  }, [projects, subgroups, items, milestoneRows, taskRows]);
 
   const columns = useMemo(
     () => viewMode === 'daily' ? buildDailyColumns(calStartDate, numCols) : buildWeeklyColumns(calStartDate, numCols),
@@ -607,7 +625,7 @@ export default function GanttChart() {
   const closeDetail = useCallback(() => setDetailPanel(null), []);
 
   // ── Vacation context menu ─────────────────────────────────────────────────────
-  const [vacMenu, setVacMenu] = useState<{ x: number; y: number; date: string; projectId: string; subgroupId?: string | null } | null>(null);
+  const [vacMenu, setVacMenu] = useState<{ x: number; y: number; date: string; projectId: string; subgroupId?: string | null; taskRowId?: string | null } | null>(null);
   // Track whether a context menu event came from our calendar so we can
   // distinguish it from right-clicks elsewhere (which should close our menu)
   const contextMenuFromCalendar = useRef(false);
@@ -641,7 +659,7 @@ export default function GanttChart() {
    * the flat rows array and accumulating row heights — much more precise than
    * DOM rect scanning which misses unregistered rows (milestone rows, etc.).
    */
-  const getRowContextFromY = useCallback((clientY: number): { projectId: string; subgroupId?: string | null } => {
+  const getRowContextFromY = useCallback((clientY: number): { projectId: string; subgroupId?: string | null; taskRowId?: string | null } => {
     const container = ganttScrollRef.current;
     if (!container || rows.length === 0) {
       return { projectId: projects[0]?.id ?? '', subgroupId: null };
@@ -659,20 +677,22 @@ export default function GanttChart() {
     for (const row of rows) {
       const rowHeight = row.kind === 'milestones' ? MILESTONE_ROW_H : ROW_H;
       if (relativeY < accumulated + rowHeight) {
-        // This is the row the cursor is in
         if (row.kind === 'header') {
           currentProjectId  = row.project.id;
           currentSubgroupId = null;
         } else if (row.kind === 'subheader') {
           currentProjectId  = row.project.id;
           currentSubgroupId = row.subgroup.id;
+        } else if (row.kind === 'taskrow') {
+          currentProjectId  = row.project.id;
+          currentSubgroupId = row.subgroup?.id ?? null;
+          return { projectId: currentProjectId, subgroupId: currentSubgroupId, taskRowId: row.taskRow.id };
         } else {
           currentProjectId  = row.project.id;
           currentSubgroupId = row.subgroup?.id ?? null;
         }
         break;
       }
-      // Track last seen project/subgroup as we walk
       if (row.kind === 'header') {
         currentProjectId  = row.project.id;
         currentSubgroupId = null;
@@ -685,7 +705,7 @@ export default function GanttChart() {
       accumulated += rowHeight;
     }
 
-    return { projectId: currentProjectId, subgroupId: currentSubgroupId };
+    return { projectId: currentProjectId, subgroupId: currentSubgroupId, taskRowId: null };
   }, [rows, projects, ganttScrollRef]);
 
   /** Returns true if the given ISO date falls within any vacation period */
@@ -960,6 +980,9 @@ export default function GanttChart() {
                     isHovered={hoveredKey === `tr-${row.taskRow.id}`}
                     onHover={setHoveredKey}
                     onBarClick={(e, task) => openDetail(task, task.color ?? row.project.color, e)}
+                    onRowClick={handleTaskRowClick}
+                    onDragStart={(e, kind, task) => startCalDrag(e, kind, task)}
+                    dragPreview={calDragPreview}
                     today={today}
                   />
                 );
@@ -1059,7 +1082,7 @@ export default function GanttChart() {
 
           {/* Add Task */}
           <CtxMenuItem icon="▬" label="Add Task here" onClick={() => {
-            setQuickAdd({ type: 'task', date: vacMenu.date, x: vacMenu.x, y: vacMenu.y, name: '', projectId: vacMenu.projectId || (projects[0]?.id ?? ''), subgroupId: vacMenu.subgroupId ?? '', milestoneRowId: '' });
+            setQuickAdd({ type: 'task', date: vacMenu.date, x: vacMenu.x, y: vacMenu.y, name: '', projectId: vacMenu.projectId || (projects[0]?.id ?? ''), subgroupId: vacMenu.subgroupId ?? '', milestoneRowId: vacMenu.taskRowId ?? '' });
             setVacMenu(null);
           }} />
 
@@ -1142,7 +1165,7 @@ export default function GanttChart() {
                 const name = quickAdd.name.trim();
                 if (!name || !quickAdd.projectId) return;
                 if (quickAdd.type === 'task') {
-                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', userId: '', timelineId: '', projectId: quickAdd.projectId, subgroupId: quickAdd.subgroupId || null, name, startDate: quickAdd.date, endDate: null, order: 0 } });
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', userId: '', timelineId: '', projectId: quickAdd.projectId, subgroupId: quickAdd.subgroupId || null, taskRowId: quickAdd.milestoneRowId || null, name, startDate: quickAdd.date, endDate: null, order: 0 } });
                 } else {
                   dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'milestone', userId: '', timelineId: '', projectId: quickAdd.projectId, subgroupId: quickAdd.subgroupId || null, milestoneRowId: quickAdd.milestoneRowId || null, name, date: quickAdd.date, order: 0 } });
                 }
@@ -1185,6 +1208,25 @@ export default function GanttChart() {
             );
           })()}
 
+          {/* Task row selector */}
+          {quickAdd.type === 'task' && (() => {
+            const rows = taskRows.filter(r => r.projectId === quickAdd.projectId);
+            if (rows.length === 0) return null;
+            return (
+              <select
+                className="form-input"
+                value={quickAdd.milestoneRowId}
+                onChange={e => setQuickAdd(q => q && ({ ...q, milestoneRowId: e.target.value }))}
+                style={{ appearance: 'auto', width: '100%', boxSizing: 'border-box' }}
+              >
+                <option value="">— Independent row (default) —</option>
+                {rows.map(r => (
+                  <option key={r.id} value={r.id}>{r.name}</option>
+                ))}
+              </select>
+            );
+          })()}
+
           {/* Milestone row selector */}
           {quickAdd.type === 'milestone' && (() => {
             const rows = milestoneRows.filter(r => r.projectId === quickAdd.projectId);
@@ -1213,7 +1255,7 @@ export default function GanttChart() {
                 const name = quickAdd.name.trim();
                 if (!name || !quickAdd.projectId) return;
                 if (quickAdd.type === 'task') {
-                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', userId: '', timelineId: '', projectId: quickAdd.projectId, subgroupId: quickAdd.subgroupId || null, name, startDate: quickAdd.date, endDate: null, order: 0 } });
+                  dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'task', userId: '', timelineId: '', projectId: quickAdd.projectId, subgroupId: quickAdd.subgroupId || null, taskRowId: quickAdd.milestoneRowId || null, name, startDate: quickAdd.date, endDate: null, order: 0 } });
                 } else {
                   dispatch({ type: 'ADD_ITEM', item: { id: `${Date.now()}-${Math.random().toString(36).slice(2,6)}`, type: 'milestone', userId: '', timelineId: '', projectId: quickAdd.projectId, subgroupId: quickAdd.subgroupId || null, milestoneRowId: quickAdd.milestoneRowId || null, name, date: quickAdd.date, order: 0 } });
                 }
@@ -1451,10 +1493,11 @@ function LeftPanelMilestonesRow({ row, rowH, isHovered, onHover, onDeleteMilesto
       {/* Hover tooltip listing milestone names + delete buttons */}
       {showTooltip && milestones.length > 0 && (
         <div style={{
-          position: 'absolute', left: '100%', top: 0, zIndex: 50,
+          position: 'absolute', left: 0, top: '100%', zIndex: 50, width: '100%',
           background: 'var(--bg-surface)', border: '1px solid var(--border)',
-          borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-          padding: '8px 0', minWidth: 200, maxWidth: 280,
+          borderTop: 'none', borderRadius: '0 0 8px 8px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+          padding: '4px 0',
         }}>
           {milestones.map(m => (
             <div key={m.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 12px' }}
@@ -1976,12 +2019,15 @@ function LeftPanelTaskRowGroup({ row, rowH, isHovered, onHover, onDeleteTask, on
           style={{ width: 16, height: 16, borderRadius: 3, background: '#fee2e2', color: '#ef4444', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>×</button>
       )}
 
-      {/* Hover tooltip */}
+      {/* Tooltip — appears BELOW the row, inside the left panel, so it never overlays the calendar */}
       {isHovered && tasks.length > 0 && (
-        <div style={{ position: 'absolute', left: '100%', top: 0, zIndex: 50,
+        <div style={{
+          position: 'absolute', left: 0, top: '100%', zIndex: 50, width: '100%',
           background: 'var(--bg-surface)', border: '1px solid var(--border)',
-          borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
-          padding: '8px 0', minWidth: 200 }}>
+          borderTop: 'none', borderRadius: '0 0 8px 8px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+          padding: '4px 0',
+        }}>
           {tasks.map(t => (
             <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 12px' }}>
               <div style={{ width: 10, height: 4, background: t.color ?? project.color, borderRadius: 2, flexShrink: 0 }} />
@@ -1999,25 +2045,36 @@ function LeftPanelTaskRowGroup({ row, rowH, isHovered, onHover, onDeleteTask, on
 // ─── Calendar: Task Row Group ─────────────────────────────────────────────────
 // Renders multiple task bars stacked vertically within a single ROW_H row
 
-function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, onHover, onBarClick, today }: {
+function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, onHover, onBarClick, onRowClick, onDragStart, dragPreview, today }: {
   tasks: GanttTask[]; taskRow: TaskRow; project: Project;
   rowH: number; totalWidth: number; calStartDate: Date; ppd: number;
   columns: Date[]; colWidth: number; isHovered: boolean;
   onHover: (key: string | null) => void;
   onBarClick: (e: React.MouseEvent, task: GanttTask) => void;
+  onRowClick: (e: React.MouseEvent<HTMLDivElement>, task: GanttTask, el: HTMLDivElement) => void;
+  onDragStart: (e: React.MouseEvent, kind: 'move-task' | 'resize-left' | 'resize-right', task: GanttTask) => void;
+  dragPreview: CalDragPreview | null;
   today: string;
 }) {
-  const key = `tr-${taskRow.id}`;
-  const BAR_H    = Math.max(10, Math.floor((rowH - 8) / Math.max(tasks.length, 1)));
-  const BAR_GAP  = 2;
+  const key    = `tr-${taskRow.id}`;
+  const rowRef = useRef<HTMLDivElement>(null);
+  // All bars at same height — parallel in the same lane, may overlap
+  const BAR_H = TASK_BAR_H;
+
+  // First unplaced task — the one that will be placed on next click
+  const firstUnplaced = tasks.find(t => !t.startDate || !t.endDate);
+  const hasUnplaced   = !!firstUnplaced;
 
   return (
     <div
+      ref={rowRef}
       style={{ height: rowH, width: totalWidth, position: 'relative',
         background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)',
-        borderBottom: '1px solid var(--border)', display: 'flex', transition: 'background 0.1s' }}
+        borderBottom: '1px solid var(--border)', display: 'flex', transition: 'background 0.1s',
+        cursor: hasUnplaced ? 'crosshair' : 'default' }}
       onMouseEnter={() => onHover(key)}
       onMouseLeave={() => onHover(null)}
+      onClick={e => { if (firstUnplaced && rowRef.current) onRowClick(e, firstUnplaced, rowRef.current); }}
     >
       {/* Column background */}
       {columns.map((col, i) => (
@@ -2026,27 +2083,47 @@ function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calSt
           background: formatDate(col) === today ? 'var(--accent-light)' : (isWeekend(col) && colWidth < 50 ? '#f9fafb' : 'transparent') }} />
       ))}
 
-      {/* Task bars stacked */}
-      <div style={{ position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 3, padding: '4px 0' }}>
-        {tasks.filter(t => t.startDate && t.endDate).map((t, i) => {
-          const start   = parseDate(t.startDate!);
-          const end     = parseDate(t.endDate!);
-          const leftPx  = dayDiff(calStartDate, start) * ppd;
-          const widthPx = (dayDiff(start, end) + 1) * ppd;
-          const topPx   = i * (BAR_H + BAR_GAP);
-          const color   = t.color ?? project.color;
+      {/* Placement hint when there's an unplaced task */}
+      {hasUnplaced && isHovered && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center',
+          paddingLeft: 12, pointerEvents: 'none', zIndex: 2 }}>
+          <span style={{ fontSize: 11, color: project.color, fontStyle: 'italic',
+            background: project.color + '12', padding: '2px 8px', borderRadius: 4,
+            border: `1px dashed ${project.color}60` }}>
+            {firstUnplaced?.startDate ? '→ Click to set end date' : `→ Click to place "${firstUnplaced?.name}"`}
+          </span>
+        </div>
+      )}
+
+      {/* Task bars — reuse TaskBar which has drag handles built in */}
+      {/* Detect overlaps: if a task's date range intersects another's, render both semi-transparent */}
+      <div style={{ position: 'absolute', inset: 0, zIndex: 3 }}>
+        {tasks.map(t => {
+          // A task overlaps if any other placed task in the row shares a date range with it
+          const isOverlapping = t.startDate && t.endDate && tasks.some(other =>
+            other.id !== t.id &&
+            other.startDate && other.endDate &&
+            t.startDate! <= other.endDate! &&
+            t.endDate! >= other.startDate!
+          );
+          const taskPreview = dragPreview?.itemId === t.id
+            ? { startDate: dragPreview.startDate, endDate: dragPreview.endDate }
+            : undefined;
           return (
             <div key={t.id}
-              title={`${t.name}: ${t.startDate} → ${t.endDate}`}
-              onClick={e => { e.stopPropagation(); onBarClick(e, t); }}
-              style={{ position: 'absolute', left: leftPx, width: Math.max(widthPx, 4), top: topPx,
-                height: BAR_H, background: color, borderRadius: 3,
-                display: 'flex', alignItems: 'center', paddingLeft: 4, overflow: 'hidden',
-                boxShadow: `0 1px 3px ${color}44`, cursor: 'pointer', pointerEvents: 'auto' }}>
-              <span style={{ fontSize: 9, fontWeight: 600, color: '#fff', whiteSpace: 'nowrap',
-                overflow: 'hidden', textOverflow: 'ellipsis', textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}>
-                {t.name}
-              </span>
+              style={{ opacity: isOverlapping ? 0.65 : 1, transition: 'opacity 0.15s' }}
+              onClick={t.startDate && t.endDate ? e => e.stopPropagation() : undefined}
+            >
+              <TaskBar
+                task={t}
+                color={t.color ?? project.color}
+                calStart={calStartDate}
+                ppd={ppd}
+                rowH={rowH}
+                preview={taskPreview}
+                onDragStart={(e, kind) => onDragStart(e, kind, t)}
+                onBarClick={e => { e.stopPropagation(); onBarClick(e, t); }}
+              />
             </div>
           );
         })}

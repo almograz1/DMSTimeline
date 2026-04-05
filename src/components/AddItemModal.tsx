@@ -20,7 +20,8 @@ export default function AddItemModal({ defaultProjectId, itemType, onClose }: Pr
   // Subgroups that belong to the currently selected project
   const availableSubgroups     = state.subgroups.filter(s => s.projectId === projectId);
   const availableMilestoneRows = state.milestoneRows.filter(r => r.projectId === projectId);
-  const availableTaskRows      = state.taskRows.filter(r => r.projectId === projectId && (r.subgroupId ?? null) === (subgroupId || null));
+  // Show all task rows for the project — user can assign to any row regardless of their subgroup choice
+  const availableTaskRows      = state.taskRows.filter(r => r.projectId === projectId);
 
   // Reset subgroup selection when project changes
   useEffect(() => { setSubgroupId(''); setMilestoneRowId(''); setTaskRowId(''); }, [projectId]);
@@ -122,6 +123,24 @@ export default function AddItemModal({ defaultProjectId, itemType, onClose }: Pr
               <option value="">— No subgroup (top-level) —</option>
               {availableSubgroups.map(s => (
                 <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {/* Task row selector — only for tasks */}
+        {itemType === 'task' && availableTaskRows.length > 0 && (
+          <div className="form-group">
+            <label className="form-label">Task Row <span style={{ fontWeight: 400, color: 'var(--text-muted)' }}>(optional)</span></label>
+            <select
+              className="form-input"
+              value={taskRowId}
+              onChange={e => setTaskRowId(e.target.value)}
+              style={{ appearance: 'auto' }}
+            >
+              <option value="">— Independent row (default) —</option>
+              {availableTaskRows.map(r => (
+                <option key={r.id} value={r.id}>{r.name}</option>
               ))}
             </select>
           </div>
