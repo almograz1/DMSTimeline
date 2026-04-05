@@ -1810,7 +1810,6 @@ function CalendarSubgroupRow({ subgroup, project, totalWidth, rowH, columns, col
       width: totalWidth,
       background: project.color + '14',
       borderBottom: '1px solid var(--border)',
-      borderLeft: `3px solid ${project.color}60`,
       display: 'flex',
       position: 'relative',
     }}>
