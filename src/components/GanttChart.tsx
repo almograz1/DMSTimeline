@@ -50,7 +50,7 @@ interface CalDragPreview {
 
 /** What is being dragged in the left panel */
 interface RowDragState {
-  kind: 'project' | 'task' | 'taskrow';
+  kind: 'project' | 'task' | 'taskrow' | 'milestonerow';
   id: string;
   projectId?: string;
   subgroupId?: string | null;
@@ -415,67 +415,63 @@ export default function GanttChart() {
         const insertAt = pos === 'after' ? toIdx + 1 : toIdx;
         newIds.splice(insertAt, 0, drag.id);
         dispatch({ type: 'REORDER_PROJECTS', orderedIds: newIds });
-      } else if (drag.kind === 'taskrow') {
-        // Get all task rows for this project in current visual order
+      } else if (drag.kind === 'milestonerow' || drag.kind === 'taskrow') {
         const rows = rowsRef.current;
-        const projectTaskRows = rows
-          .filter(r => r.kind === 'taskrow' && r.taskRow.projectId === drag.projectId)
-          .map(r => (r as { kind: 'taskrow'; taskRow: import('../types').TaskRow }).taskRow);
 
-        if (projectTaskRows.length < 2) return;
+        const getRowKey = (r: typeof rows[0]): string => {
+          if (r.kind === 'header')     return r.project.id;
+          if (r.kind === 'subheader')  return 'sg-' + r.subgroup.id;
+          if (r.kind === 'item')       return r.item.id;
+          if (r.kind === 'taskrow')    return 'tr-' + r.taskRow.id;
+          if (r.kind === 'milestones') return 'ms-' + r.project.id + '-' + (r.subgroup?.id ?? 'top') + '-' + (r.milestoneRow?.id ?? 'default');
+          return '';
+        };
 
-        // Find drag and target indices in the task-rows-only list
-        const fromIdx = projectTaskRows.findIndex(r => r.id === drag.id);
-        const targetRowId = targetKey.startsWith('tr-') ? targetKey.slice(3) : null;
-        let toIdx = targetRowId ? projectTaskRows.findIndex(r => r.id === targetRowId) : -1;
+        const isMyKind = (r: typeof rows[0]): boolean =>
+          drag.kind === 'taskrow'
+            ? r.kind === 'taskrow' && r.taskRow.projectId === drag.projectId
+            : r.kind === 'milestones' && !!r.milestoneRow && r.project.id === drag.projectId;
 
+        const getId = (r: typeof rows[0]): string =>
+          drag.kind === 'taskrow'
+            ? (r as any).taskRow.id
+            : (r as any).milestoneRow.id;
+
+        // Get all same-kind rows in current visual order (flat list order = display order)
+        const kindRows = rows.filter(isMyKind);
+        if (kindRows.length < 1) return;
+
+        const fromIdx = kindRows.findIndex(r => getId(r) === drag.id);
         if (fromIdx === -1) return;
 
-        // If dropping onto a non-taskrow target, find the nearest taskrow in the flat list
-        if (toIdx === -1) {
-          const flatTargetIdx = rows.findIndex(r => {
-            if (r.kind === 'item')      return r.item.id === targetKey;
-            if (r.kind === 'header')    return r.project.id === targetKey;
-            if (r.kind === 'subheader') return 'sg-' + r.subgroup.id === targetKey;
-            return false;
-          });
-          if (flatTargetIdx === -1) return;
-          // Walk toward the drop position to find closest taskrow
-          if (pos === 'before') {
-            // Find last taskrow before this index
-            for (let i = flatTargetIdx - 1; i >= 0; i--) {
-              const r = rows[i];
-              if (r.kind === 'taskrow' && r.taskRow.projectId === drag.projectId) {
-                toIdx = projectTaskRows.findIndex(tr => tr.id === r.taskRow.id);
-                break;
-              }
-              if (r.kind === 'header') break;
-            }
-            if (toIdx === -1) toIdx = 0; // put at start
-          } else {
-            // Find first taskrow after this index
-            for (let i = flatTargetIdx + 1; i < rows.length; i++) {
-              const r = rows[i];
-              if (r.kind === 'taskrow' && r.taskRow.projectId === drag.projectId) {
-                toIdx = projectTaskRows.findIndex(tr => tr.id === r.taskRow.id);
-                break;
-              }
-              if (r.kind === 'header' && r.project.id !== drag.projectId) break;
-            }
-            if (toIdx === -1) toIdx = projectTaskRows.length - 1; // put at end
+        // Find the visual position of the drop target in the full rows list
+        const flatTargetIdx = rows.findIndex(r => getRowKey(r) === targetKey);
+        if (flatTargetIdx === -1) return;
+
+        // Determine where in the same-kind list to insert:
+        // Count how many same-kind rows appear before the drop position (after accounting for before/after)
+        const insertBeforeFlatIdx = pos === 'before' ? flatTargetIdx : flatTargetIdx + 1;
+
+        // Count same-kind rows that appear strictly before insertBeforeFlatIdx (excluding the dragged one)
+        let insertBeforeKindIdx = 0;
+        for (let i = 0; i < rows.length && i < insertBeforeFlatIdx; i++) {
+          if (isMyKind(rows[i]) && getId(rows[i]) !== drag.id) {
+            insertBeforeKindIdx++;
           }
         }
 
-        if (toIdx === -1 || fromIdx === toIdx) return;
+        // Build new id order: remove from current position, insert at new position
+        const ids = kindRows.map(getId);
+        ids.splice(fromIdx, 1); // remove
+        ids.splice(insertBeforeKindIdx, 0, drag.id); // insert
 
-        // Splice and reindex with 1000-gap orders
-        const ids = projectTaskRows.map(r => r.id);
-        ids.splice(fromIdx, 1);
-        const adjustedTo = pos === 'after'
-          ? (fromIdx < toIdx ? toIdx : toIdx + 1)
-          : (fromIdx < toIdx ? toIdx - 1 : toIdx);
-        ids.splice(Math.max(0, Math.min(ids.length, adjustedTo)), 0, drag.id);
-        dispatch({ type: 'REORDER_TASK_ROWS', projectId: drag.projectId!, orderedIds: ids });
+        if (drag.kind === 'taskrow') {
+          const sgId = drag.subgroupId ?? null;
+          dispatch({ type: 'REORDER_TASK_ROWS', projectId: drag.projectId!, subgroupId: sgId, orderedIds: ids });
+        } else {
+          const sgId = drag.subgroupId ?? null;
+          dispatch({ type: 'REORDER_MILESTONE_ROWS', projectId: drag.projectId!, subgroupId: sgId, orderedIds: ids });
+        }
       } else {
         // ── Task drag: may be cross-subgroup ────────────────────────────────
         // Determine what the drop target is:
@@ -566,43 +562,41 @@ export default function GanttChart() {
       const allTasks   = (projectItems.filter(i => i.type === 'task')      as GanttTask[]).sort((a,b) => (a.order??0)-(b.order??0));
       const milestones = (projectItems.filter(i => i.type === 'milestone') as GanttMilestone[]).sort((a,b) => (a.order??0)-(b.order??0));
 
-      // All project task rows (project-wide, not scoped to subgroup)
-      const allProjectTaskRows  = taskRows.filter(r => r.projectId === project.id);
-      const validTaskRowIds     = new Set(allProjectTaskRows.map(r => r.id));
+      // Task rows scoped to this project+subgroup context
+      const contextTaskRows = taskRows.filter(r =>
+        r.projectId === project.id && (r.subgroupId ?? null) === (subgroup?.id ?? null)
+      );
+      const validTaskRowIds = new Set(contextTaskRows.map(r => r.id));
 
-      // Independent tasks: no taskRowId, or stale taskRowId
+      // Independent tasks: no taskRowId or stale taskRowId
       const independentTasks = allTasks.filter(t => !t.taskRowId || !validTaskRowIds.has(t.taskRowId));
       for (const task of independentTasks) result.push({ kind: 'item', item: task, project, subgroup });
 
-      // Named task rows — only rendered at top level (not inside subgroups) to avoid duplication
-      if (!subgroup) {
-        for (const tRow of allProjectTaskRows) {
-          // Collect tasks from ALL subgroups that are assigned to this row
-          const rowTasks = items.filter(i =>
-            i.projectId === project.id && i.type === 'task' && i.taskRowId === tRow.id
-          ).sort((a,b) => (a.order??0)-(b.order??0)) as GanttTask[];
-          result.push({ kind: 'taskrow', tasks: rowTasks, project, taskRow: tRow });
-        }
+      // Named task rows for this context
+      for (const tRow of contextTaskRows) {
+        const rowTasks = allTasks.filter(t => t.taskRowId === tRow.id)
+          .sort((a,b) => (a.order??0)-(b.order??0)) as GanttTask[];
+        result.push({ kind: 'taskrow', tasks: rowTasks, project, subgroup, taskRow: tRow });
       }
 
-      const tasks = allTasks; // alias for milestone section below
+      // Milestone rows scoped to this project+subgroup context
+      const contextMilestoneRows = milestoneRows.filter(r =>
+        r.projectId === project.id && (r.subgroupId ?? null) === (subgroup?.id ?? null)
+      );
 
-      const projectMilestoneRows = milestoneRows.filter(r => r.projectId === project.id);
-
-      if (projectMilestoneRows.length === 0) {
+      if (contextMilestoneRows.length === 0) {
         // No named rows defined → single default row
         if (milestones.length > 0) result.push({ kind: 'milestones', milestones, project, subgroup });
       } else {
         // One row per named milestone row — only show if it has milestones
-        for (const mRow of projectMilestoneRows) {
+        for (const mRow of contextMilestoneRows) {
           const rowMilestones = milestones.filter(m => m.milestoneRowId === mRow.id);
-          // Only render the row if it has milestones (avoids empty ghost rows)
           if (rowMilestones.length > 0) {
             result.push({ kind: 'milestones', milestones: rowMilestones, project, subgroup, milestoneRow: mRow });
           }
         }
-        // Fallback: milestones not assigned to any named row (or with stale milestoneRowId)
-        const validRowIds = new Set(projectMilestoneRows.map(r => r.id));
+        // Fallback: milestones not assigned to any named row
+        const validRowIds = new Set(contextMilestoneRows.map(r => r.id));
         const unassigned = milestones.filter(m => !m.milestoneRowId || !validRowIds.has(m.milestoneRowId));
         if (unassigned.length > 0) {
           result.push({ kind: 'milestones', milestones: unassigned, project, subgroup });
@@ -621,8 +615,8 @@ export default function GanttChart() {
       const isTopLevel = (i: typeof items[0]) =>
         i.projectId === project.id && (!i.subgroupId || !validSgIds.has(i.subgroupId));
 
-      // Task rows for this project
-      const projectTaskRows = taskRows.filter(r => r.projectId === project.id);
+      // Task rows scoped to project level (subgroupId = null)
+      const projectTaskRows = taskRows.filter(r => r.projectId === project.id && (r.subgroupId ?? null) === null);
       const validTaskRowIds = new Set(projectTaskRows.map(r => r.id));
 
       // Independent top-level tasks (no taskRowId or stale taskRowId, no subgroup)
@@ -641,19 +635,18 @@ export default function GanttChart() {
         }
       }
 
-      // Named task rows — collect ALL tasks (across subgroups) assigned to each row
+      // Project-level task rows (subgroupId=null)
       for (const tRow of projectTaskRows) {
         const rowTasks = (items.filter(i =>
           i.projectId === project.id && i.type === 'task' && i.taskRowId === tRow.id
         ) as GanttTask[]).sort((a,b) => (a.order??0)-(b.order??0));
-        // Always show the row so tasks can be placed into it
         result.push({ kind: 'taskrow', tasks: rowTasks, project, taskRow: tRow });
       }
 
-      // Project-level milestone rows render LAST
+      // Project-level milestone rows (subgroupId=null) render LAST
       const topMilestones = (items.filter(i => isTopLevel(i) && i.type === 'milestone') as GanttMilestone[])
         .sort((a,b) => (a.order??0)-(b.order??0));
-      const projectMilestoneRows = milestoneRows.filter(r => r.projectId === project.id);
+      const projectMilestoneRows = milestoneRows.filter(r => r.projectId === project.id && (r.subgroupId ?? null) === null);
       if (projectMilestoneRows.length === 0) {
         if (topMilestones.length > 0) result.push({ kind: 'milestones', milestones: topMilestones, project });
       } else {
@@ -790,7 +783,8 @@ export default function GanttChart() {
   }, [dispatch]);
 
   const saveDetailColor = useCallback((itemId: string, color: string | null) => {
-    dispatch({ type: 'UPDATE_ITEM', itemId, patch: { color: color ?? undefined } });
+    // Save null explicitly — undefined is ignored by Firestore merge, null deletes the field
+    dispatch({ type: 'UPDATE_ITEM', itemId, patch: { color: color ?? null } });
   }, [dispatch]);
 
   const saveDetailName = useCallback((itemId: string, name: string) => {
@@ -873,10 +867,11 @@ export default function GanttChart() {
             if (row.kind === 'item') {
               const key       = row.item.id;
               const projectId = row.project.id;
-              const isDragKindTask    = rowDragKind === 'task' && rowDragStateRef.current?.projectId === projectId;
-              const isDragKindTaskRow = rowDragKind === 'taskrow' && rowDragStateRef.current?.projectId === projectId;
-              const showDropBefore = rowDropTarget === key && rowDropPosition === 'before' && (isDragKindTask || isDragKindTaskRow);
-              const showDropAfter  = rowDropTarget === key && rowDropPosition === 'after'  && (isDragKindTask || isDragKindTaskRow);
+              const isDragKindTask     = rowDragKind === 'task'        && rowDragStateRef.current?.projectId === projectId;
+              const isDragKindTaskRow  = rowDragKind === 'taskrow'     && rowDragStateRef.current?.projectId === projectId;
+              const isDragKindMsRow    = rowDragKind === 'milestonerow'&& rowDragStateRef.current?.projectId === projectId;
+              const showDropBefore = rowDropTarget === key && rowDropPosition === 'before' && (isDragKindTask || isDragKindTaskRow || isDragKindMsRow);
+              const showDropAfter  = rowDropTarget === key && rowDropPosition === 'after'  && (isDragKindTask || isDragKindTaskRow || isDragKindMsRow);
               return (
                 <React.Fragment key={key}>
                   {showDropBefore && <DropIndicator color={row.project.color} />}
@@ -895,7 +890,7 @@ export default function GanttChart() {
 
             if (row.kind === 'taskrow') {
               const key = `tr-${row.taskRow.id}`;
-              const isTaskRowDrag = rowDragKind === 'taskrow';
+              const isTaskRowDrag = (rowDragKind === 'taskrow' || rowDragKind === 'milestonerow') && rowDragStateRef.current?.projectId === row.project.id;
               const showDropBefore = rowDropTarget === key && rowDropPosition === 'before' && isTaskRowDrag;
               const showDropAfter  = rowDropTarget === key && rowDropPosition === 'after'  && isTaskRowDrag;
               return (
@@ -907,9 +902,18 @@ export default function GanttChart() {
                     rowH={ROW_H}
                     isHovered={hoveredKey === key}
                     onHover={setHoveredKey}
+                    onUpdateColor={color => dispatch({ type: 'UPDATE_TASK_ROW', taskRowId: row.taskRow.id, patch: { color } })}
                     onDeleteTask={id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
-                    onDeleteRow={() => dispatch({ type: 'DELETE_TASK_ROW', taskRowId: row.taskRow.id })}
-                    onGripMouseDown={e => startRowDrag(e, { kind: 'taskrow', id: row.taskRow.id, projectId: row.project.id })}
+                    onDeleteRow={() => {
+                      const rowTasks = items.filter(i => i.type === 'task' && i.taskRowId === row.taskRow.id);
+                      const msg = rowTasks.length > 0
+                        ? 'Delete task row ' + row.taskRow.name + ' and its ' + rowTasks.length + ' task' + (rowTasks.length === 1 ? '' : 's') + '? This cannot be undone.'
+                        : 'Delete task row ' + row.taskRow.name + '?';
+                      if (!window.confirm(msg)) return;
+                      rowTasks.forEach(t => dispatch({ type: 'DELETE_ITEM', itemId: t.id }));
+                      dispatch({ type: 'DELETE_TASK_ROW', taskRowId: row.taskRow.id });
+                    }}
+                    onGripMouseDown={e => startRowDrag(e, { kind: 'taskrow', id: row.taskRow.id, projectId: row.project.id, subgroupId: row.subgroup?.id ?? null })}
                   />
                   {showDropAfter && <DropIndicator color={row.project.color} />}
                 </React.Fragment>
@@ -931,25 +935,49 @@ export default function GanttChart() {
                     rowH={ROW_H}
                     isDragOver={rowDropTarget === key && isTaskDrag}
                     onToggle={() => dispatch({ type: 'TOGGLE_SUBGROUP_COLLAPSE', subgroupId: row.subgroup.id })}
-                    onDelete={() => dispatch({ type: 'DELETE_SUBGROUP', subgroupId: row.subgroup.id })}
+                    onDelete={() => {
+                      const sgItems = items.filter(i => i.subgroupId === row.subgroup.id);
+                      if (sgItems.length > 0) {
+                        const msg = 'Delete subgroup ' + row.subgroup.name + ' and its ' + sgItems.length + ' item' + (sgItems.length === 1 ? '' : 's') + '? This cannot be undone.';
+                        if (!window.confirm(msg)) return;
+                        sgItems.forEach(i => dispatch({ type: 'DELETE_ITEM', itemId: i.id }));
+                      }
+                      dispatch({ type: 'DELETE_SUBGROUP', subgroupId: row.subgroup.id });
+                    }}
                   />
                   {showDropAfter && <DropIndicator color={row.project.color} />}
                 </React.Fragment>
               );
             }
 
-            // milestones row — not reorderable (always last in project/subgroup)
             {
               const rowKey = `ms-${row.project.id}-${row.subgroup?.id ?? 'top'}-${row.milestoneRow?.id ?? 'default'}`;
+              const isMsRowDrag  = rowDragKind === 'milestonerow' && rowDragStateRef.current?.projectId === row.project.id;
+              const isTrRowDrag  = rowDragKind === 'taskrow'      && rowDragStateRef.current?.projectId === row.project.id;
+              const showDropBefore = rowDropTarget === rowKey && rowDropPosition === 'before' && (isMsRowDrag || isTrRowDrag);
+              const showDropAfter  = rowDropTarget === rowKey && rowDropPosition === 'after'  && (isMsRowDrag || isTrRowDrag);
               return (
-                <LeftPanelMilestonesRow
-                  key={rowKey}
-                  row={row} rowH={MILESTONE_ROW_H}
-                  isHovered={hoveredKey === rowKey}
-                  onHover={setHoveredKey}
-                  onDeleteMilestone={id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
-                  onDeleteRow={row.milestoneRow ? () => dispatch({ type: 'DELETE_MILESTONE_ROW', milestoneRowId: row.milestoneRow!.id }) : undefined}
-                />
+                <React.Fragment key={rowKey}>
+                  {showDropBefore && <DropIndicator color={row.project.color} />}
+                  <LeftPanelMilestonesRow
+                    ref={row.milestoneRow ? (el => { if (el) rowRefs.current.set(rowKey, el); else rowRefs.current.delete(rowKey); }) : undefined}
+                    row={row} rowH={MILESTONE_ROW_H}
+                    isHovered={hoveredKey === rowKey}
+                    onHover={setHoveredKey}
+                    onDeleteMilestone={id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
+                    onDeleteRow={row.milestoneRow ? () => {
+                      const rowMilestones = items.filter(i => i.type === 'milestone' && i.milestoneRowId === row.milestoneRow!.id);
+                      const msg = rowMilestones.length > 0
+                        ? 'Delete milestone row ' + row.milestoneRow!.name + ' and its ' + rowMilestones.length + ' milestone' + (rowMilestones.length === 1 ? '' : 's') + '? This cannot be undone.'
+                        : 'Delete milestone row ' + row.milestoneRow!.name + '?';
+                      if (!window.confirm(msg)) return;
+                      rowMilestones.forEach(m => dispatch({ type: 'DELETE_ITEM', itemId: m.id }));
+                      dispatch({ type: 'DELETE_MILESTONE_ROW', milestoneRowId: row.milestoneRow!.id });
+                    } : undefined}
+                    onGripMouseDown={row.milestoneRow ? e => startRowDrag(e, { kind: 'milestonerow', id: row.milestoneRow!.id, projectId: row.project.id, subgroupId: row.subgroup?.id ?? null }) : undefined}
+                  />
+                  {showDropAfter && <DropIndicator color={row.project.color} />}
+                </React.Fragment>
               );
             }
           })}
@@ -1517,12 +1545,13 @@ LeftPanelTaskRow.displayName = 'LeftPanelTaskRow';
 
 // ─── Left Panel: Milestones Row ───────────────────────────────────────────────
 
-function LeftPanelMilestonesRow({ row, rowH, isHovered, onHover, onDeleteMilestone, onDeleteRow }: {
+const LeftPanelMilestonesRow = React.forwardRef<HTMLDivElement, {
   row: CalendarRow & { kind: 'milestones' }; rowH: number;
   isHovered: boolean; onHover: (key: string | null) => void;
   onDeleteMilestone: (id: string) => void;
   onDeleteRow?: () => void;
-}) {
+  onGripMouseDown?: (e: React.MouseEvent) => void;
+}>(({ row, rowH, isHovered, onHover, onDeleteMilestone, onDeleteRow, onGripMouseDown }, ref) => {
   const { milestones, project, milestoneRow } = row;
   const rowKey        = `ms-${project.id}-${row.subgroup?.id ?? 'top'}-${milestoneRow?.id ?? 'default'}`;
   const unplacedCount = milestones.filter(m => m.date === null).length;
@@ -1536,11 +1565,14 @@ function LeftPanelMilestonesRow({ row, rowH, isHovered, onHover, onDeleteMilesto
 
   return (
     <div
-      style={{ height: rowH, display: 'flex', alignItems: 'center', paddingLeft: 28, paddingRight: 8, gap: 6, position: 'relative',
+      ref={ref}
+      style={{ height: rowH, display: 'flex', alignItems: 'center', paddingLeft: 8, paddingRight: 8, gap: 6, position: 'relative',
         background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)', borderBottom: '1px solid var(--border)', transition: 'background 0.1s' }}
       onMouseEnter={() => { onHover(rowKey); setShowTooltip(true); }}
       onMouseLeave={() => { onHover(null); setShowTooltip(false); }}
     >
+      {/* Grip handle — only for named milestone rows */}
+      {onGripMouseDown ? <GripHandle onMouseDown={onGripMouseDown} /> : <div style={{ width: 16, flexShrink: 0 }} />}
       {/* Icon */}
       <span style={{ fontSize: 12, flexShrink: 0 }}>{icon}</span>
 
@@ -1597,7 +1629,8 @@ function LeftPanelMilestonesRow({ row, rowH, isHovered, onHover, onDeleteMilesto
       )}
     </div>
   );
-}
+});
+LeftPanelMilestonesRow.displayName = 'LeftPanelMilestonesRow';
 
 // ─── Calendar: Background Row ─────────────────────────────────────────────────
 
@@ -2073,6 +2106,8 @@ function CalendarSubgroupRow({ subgroup, project, totalWidth, rowH, columns, col
 
 // ─── Left Panel: Task Row Group ───────────────────────────────────────────────
 
+const TASKROW_COLORS = ['#ef4444','#f97316','#eab308','#22c55e','#14b8a6','#3b82f6','#8b5cf6','#ec4899','#94a3b8','#1e293b'];
+
 const LeftPanelTaskRowGroup = React.forwardRef<HTMLDivElement, {
   row: CalendarRow & { kind: 'taskrow' };
   rowH: number;
@@ -2081,9 +2116,12 @@ const LeftPanelTaskRowGroup = React.forwardRef<HTMLDivElement, {
   onDeleteTask: (id: string) => void;
   onDeleteRow: () => void;
   onGripMouseDown: (e: React.MouseEvent) => void;
-}>(({ row, rowH, isHovered, onHover, onDeleteTask, onDeleteRow, onGripMouseDown }, ref) => {
+  onUpdateColor: (color: string | null) => void;
+}>(({ row, rowH, isHovered, onHover, onDeleteTask, onDeleteRow, onGripMouseDown, onUpdateColor }, ref) => {
   const { tasks, project, taskRow } = row;
   const key = `tr-${taskRow.id}`;
+  const [showColorPicker, setShowColorPicker] = useState(false);
+  const rowColor = taskRow.color ?? project.color;
 
   return (
     <div
@@ -2097,8 +2135,26 @@ const LeftPanelTaskRowGroup = React.forwardRef<HTMLDivElement, {
       {/* Grip handle */}
       <GripHandle onMouseDown={onGripMouseDown} />
 
-      {/* Row icon */}
-      <div style={{ width: 12, height: 5, background: project.color, borderRadius: 2, flexShrink: 0, opacity: 0.5 }} />
+      {/* Color dot — click to pick row color */}
+      <div
+        onClick={e => { e.stopPropagation(); setShowColorPicker(v => !v); }}
+        title="Set row color"
+        style={{ width: 12, height: 12, borderRadius: '50%', background: rowColor, flexShrink: 0, cursor: 'pointer', border: '1.5px solid rgba(0,0,0,0.1)' }}
+      />
+
+      {/* Color picker popup */}
+      {showColorPicker && (
+        <div style={{ position: 'absolute', left: 28, top: '100%', zIndex: 60, background: 'var(--bg-surface)', border: '1px solid var(--border)', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.15)', padding: 8, display: 'flex', flexWrap: 'wrap', gap: 4, width: 140 }}
+          onClick={e => e.stopPropagation()}>
+          {TASKROW_COLORS.map(c => (
+            <div key={c} onClick={() => { onUpdateColor(c); setShowColorPicker(false); }}
+              style={{ width: 20, height: 20, borderRadius: '50%', background: c, cursor: 'pointer', border: taskRow.color === c ? '2px solid #000' : '1px solid rgba(0,0,0,0.15)' }} />
+          ))}
+          <div onClick={() => { onUpdateColor(null); setShowColorPicker(false); }}
+            title="Use project color"
+            style={{ width: 20, height: 20, borderRadius: '50%', background: project.color, cursor: 'pointer', border: '2px dashed rgba(0,0,0,0.3)', fontSize: 9, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>↺</div>
+        </div>
+      )}
 
       {/* Row name */}
       <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', flex: 1,
@@ -2107,8 +2163,8 @@ const LeftPanelTaskRowGroup = React.forwardRef<HTMLDivElement, {
       </span>
 
       {/* Task count */}
-      <span style={{ fontSize: 10, fontWeight: 600, color: project.color,
-        background: project.color + '18', borderRadius: 10, padding: '1px 6px', flexShrink: 0 }}>
+      <span style={{ fontSize: 10, fontWeight: 600, color: rowColor,
+        background: rowColor + '18', borderRadius: 10, padding: '1px 6px', flexShrink: 0 }}>
         {tasks.length}
       </span>
 
@@ -2216,7 +2272,7 @@ function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calSt
             >
               <TaskBar
                 task={t}
-                color={t.color ?? project.color}
+                color={t.color ?? taskRow.color ?? project.color}
                 calStart={calStartDate}
                 ppd={ppd}
                 rowH={rowH}

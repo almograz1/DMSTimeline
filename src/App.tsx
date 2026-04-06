@@ -68,7 +68,7 @@ function TimelineSelector() {
         <button
           title="Delete this timeline"
           onClick={() => {
-            if (confirm(`Delete timeline "${activeTimeline.name}"? All its data will be lost.`)) {
+            if (confirm('Delete timeline ' + activeTimeline.name + '? All its data will be lost.')) {
               deleteTimeline(activeTimeline.id);
             }
           }}

@@ -38,8 +38,9 @@ export interface MilestoneRow {
   userId: string;
   timelineId: string;
   projectId: string;
-  name: string;       // e.g. "WIP", "Release", "Gate"
-  icon: string;       // emoji icon, e.g. "◆", "🚩", "⭐", "●", "⚡", "🔷"
+  subgroupId?: string | null;
+  name: string;
+  icon: string;
   order: number;
 }
 
@@ -107,5 +108,6 @@ export interface TaskRow {
   projectId: string;
   subgroupId?: string | null;
   name: string;
+  color?: string | null;
   order: number;
 }
