@@ -237,25 +237,34 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow,
 
 function TBtn({ onClick, icon, label, accent = false }: { onClick: () => void; icon: string; label: string; accent?: boolean }) {
   return (
-    <button onClick={onClick} style={{
-      display: 'flex', alignItems: 'center', gap: 4, padding: '4px 10px', borderRadius: 6,
-      fontSize: 11, fontWeight: 600,
-      background: accent ? 'linear-gradient(135deg, #6366f1, #8b5cf6)' : 'rgba(255,255,255,0.07)',
-      color: '#fff', border: accent ? 'none' : '1px solid rgba(255,255,255,0.1)',
-    }}>
-      <span style={{ fontSize: 10 }}>{icon}</span>{label}
+    <button onClick={onClick}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = accent ? 'linear-gradient(135deg,#5b54f5,#7c3aed)' : 'rgba(255,255,255,0.13)'; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = accent ? 'linear-gradient(135deg,#4f46e5,#7c3aed)' : 'rgba(255,255,255,0.07)'; }}
+      style={{
+        display: 'flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 7,
+        fontSize: 11.5, fontWeight: 600, letterSpacing: '0.01em',
+        background: accent ? 'linear-gradient(135deg,#4f46e5,#7c3aed)' : 'rgba(255,255,255,0.07)',
+        color: '#fff', border: accent ? 'none' : '1px solid rgba(255,255,255,0.11)',
+        transition: 'background 0.15s', whiteSpace: 'nowrap',
+        boxShadow: accent ? '0 2px 8px rgba(79,70,229,0.4)' : 'none',
+      }}>
+      <span style={{ fontSize: 11, opacity: 0.85 }}>{icon}</span>{label}
     </button>
   );
 }
 
 function TIconBtn({ onClick, label, children }: { onClick: () => void; label?: string; children?: React.ReactNode }) {
   return (
-    <button onClick={onClick} style={{
-      minWidth: label ? 48 : 26, height: 26, borderRadius: 5,
-      background: 'rgba(255,255,255,0.07)', color: 'var(--toolbar-text)',
-      fontSize: label ? 11 : 15, fontWeight: 600,
-      border: '1px solid rgba(255,255,255,0.08)', padding: '0 6px',
-    }}>
+    <button onClick={onClick}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.13)'; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.07)'; }}
+      style={{
+        minWidth: label ? 50 : 28, height: 28, borderRadius: 6,
+        background: 'rgba(255,255,255,0.07)', color: 'var(--toolbar-text)',
+        fontSize: label ? 11 : 14, fontWeight: 600,
+        border: '1px solid rgba(255,255,255,0.10)', padding: '0 7px',
+        transition: 'background 0.15s',
+      }}>
       {label ?? children}
     </button>
   );

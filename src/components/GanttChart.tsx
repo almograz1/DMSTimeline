@@ -113,7 +113,7 @@ function TaskBar({ task, color, calStart, ppd, rowH, preview, onDragStart, onBar
       >
         <div style={{ width: 1.5, height: 10, background: 'rgba(255,255,255,0.5)', borderRadius: 1 }} />
       </div>
-      <span style={{ flex: 1, paddingLeft: HANDLE_W + 4, paddingRight: HANDLE_W + 4, color: '#fff', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: '0 1px 2px rgba(0,0,0,0.3)', pointerEvents: 'none', textAlign: 'center' }}>
+      <span style={{ flex: 1, paddingLeft: HANDLE_W + 4, paddingRight: HANDLE_W + 4, color: '#fff', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: '0 1px 3px rgba(0,0,0,0.4)', pointerEvents: 'none', textAlign: 'center' }}>
         {task.name}
       </span>
       <div
@@ -153,7 +153,7 @@ function MilestoneWithLabel({ milestone, color, calStart, ppd, previewDate, onDr
       {isEmoji ? (
         <span style={{ fontSize: MILESTONE_SZ + 2, lineHeight: 1, pointerEvents: 'none', filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.2))' }}>{icon}</span>
       ) : (
-        <div style={{ width: MILESTONE_SZ, height: MILESTONE_SZ, background: color, transform: 'rotate(45deg)', borderRadius: 3, boxShadow: `0 2px 6px ${color}66`, flexShrink: 0, pointerEvents: 'none' }} />
+        <div style={{ width: MILESTONE_SZ, height: MILESTONE_SZ, background: color, transform: 'rotate(45deg)', borderRadius: 3, boxShadow: '0 2px 6px ' + color + '55', boxShadow: `0 2px 6px ${color}66`, flexShrink: 0, pointerEvents: 'none' }} />
       )}
     </div>
   );
@@ -175,7 +175,7 @@ function CalendarHeader({ columns, viewMode, colWidth, todayDate }: {
     <div style={{ display: 'flex', flexDirection: 'column', height: HEADER_H, borderBottom: '1.5px solid var(--border-strong)', background: 'var(--bg-header)', position: 'sticky', top: 0, zIndex: 5 }}>
       <div style={{ display: 'flex', height: 24, borderBottom: '1px solid var(--border)' }}>
         {monthSpans.map(({ label, count }) => (
-          <div key={label + count} style={{ width: count * colWidth, flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 8, fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', letterSpacing: '0.04em', textTransform: 'uppercase', borderRight: '1px solid var(--border)', overflow: 'hidden' }}>{label}</div>
+          <div key={label + count} style={{ width: count * colWidth, flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 10, fontSize: 10.5, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.06em', textTransform: 'uppercase', borderRight: '1px solid var(--border)', overflow: 'hidden' }}>{label}</div>
         ))}
       </div>
       <div style={{ display: 'flex', flex: 1 }}>
@@ -829,7 +829,7 @@ export default function GanttChart() {
         {/* ── LEFT PANEL ───────────────────────────────────────────────────── */}
         <div style={{ position: 'sticky', left: 0, width: LEFT_W, flexShrink: 0, background: 'var(--bg-surface)', borderRight: '1.5px solid var(--border-strong)', zIndex: 10, display: 'flex', flexDirection: 'column' }}>
           <div style={{ height: HEADER_H, display: 'flex', alignItems: 'center', paddingLeft: 16, borderBottom: '1.5px solid var(--border-strong)', background: 'var(--bg-header)', position: 'sticky', top: 0, zIndex: 11 }}>
-            <span style={{ fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em' }}>Projects / Tasks</span>
+            <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Projects / Tasks</span>
           </div>
 
           {rows.map((row, rowIndex) => {
@@ -1064,6 +1064,7 @@ export default function GanttChart() {
                     isHovered={hoveredKey === task.id}
                     isHalf={!!task.startDate && !task.endDate}
                     preview={preview}
+                    subgroupTint={row.subgroup ? row.project.color + '12' : undefined}
                     onHover={setHoveredKey}
                     onRowClick={handleTaskRowClick}
                     onDragStart={(e, kind) => startCalDrag(e, kind, task)}
@@ -1087,6 +1088,7 @@ export default function GanttChart() {
                     columns={columns}
                     colWidth={colWidth}
                     isHovered={hoveredKey === `tr-${row.taskRow.id}`}
+                    subgroupTint={row.subgroup ? row.project.color + '12' : undefined}
                     onHover={setHoveredKey}
                     onBarClick={(e, task) => openDetail(task, task.color ?? row.project.color, e)}
                     onRowClick={handleTaskRowClick}
@@ -1119,6 +1121,7 @@ export default function GanttChart() {
                   calStartDate={calStartDate} ppd={ppd}
                   columns={columns} colWidth={colWidth}
                   isHovered={hoveredKey === `ms-${row.project.id}-${row.subgroup?.id ?? 'top'}-${row.milestoneRow?.id ?? 'default'}`}
+                  subgroupTint={row.subgroup ? row.project.color + '12' : undefined}
                   onHover={id => setHoveredKey(id)}
                   onRowClick={handleMilestonesRowClick}
                   onMilestoneDragStart={(e, m) => startCalDrag(e, 'move-milestone', m)}
@@ -1494,9 +1497,9 @@ const LeftPanelHeader = React.forwardRef<HTMLDivElement, {
         style={{ fontSize: 9, color: project.color, transform: project.collapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', display: 'inline-block', flexShrink: 0, cursor: 'pointer' }}
         onClick={onToggle}
       >▼</span>
-      <div style={{ width: 10, height: 10, borderRadius: 3, background: project.color, flexShrink: 0 }} />
+      <div style={{ width: 11, height: 11, borderRadius: 4, background: project.color, flexShrink: 0, boxShadow: '0 1px 3px ' + project.color + '66' }} />
       <span
-        style={{ flex: 1, fontWeight: 700, fontSize: 12, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+        style={{ flex: 1, fontWeight: 700, fontSize: 12.5, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', letterSpacing: '-0.01em' }}
         onClick={onToggle}
       >{project.name}</span>
       {showDelete && (
@@ -1518,13 +1521,14 @@ const LeftPanelTaskRow = React.forwardRef<HTMLDivElement, {
   onGripMouseDown: (e: React.MouseEvent) => void;
 }>(({ row, rowH, isHovered, onHover, onDelete, onGripMouseDown }, ref) => {
   const { item, project } = row;
+  const subgroupTint = row.subgroup ? project.color + '12' : undefined;
   return (
     <div
       ref={ref}
       style={{
         height: rowH, display: 'flex', alignItems: 'center',
         paddingLeft: 6, paddingRight: 8, gap: 4,
-        background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)',
+        background: isHovered ? 'var(--bg-row-hover)' : (subgroupTint ?? 'var(--bg-surface)'),
         borderBottom: '1px solid var(--border)', transition: 'background 0.1s',
       }}
       onMouseEnter={() => onHover(item.id)}
@@ -1567,7 +1571,7 @@ const LeftPanelMilestonesRow = React.forwardRef<HTMLDivElement, {
     <div
       ref={ref}
       style={{ height: rowH, display: 'flex', alignItems: 'center', paddingLeft: 8, paddingRight: 8, gap: 6, position: 'relative',
-        background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)', borderBottom: '1px solid var(--border)', transition: 'background 0.1s' }}
+        background: isHovered ? 'var(--bg-row-hover)' : (row.subgroup ? row.project.color + '12' : 'var(--bg-surface)'), borderBottom: '1px solid var(--border)', transition: 'background 0.1s' }}
       onMouseEnter={() => { onHover(rowKey); setShowTooltip(true); }}
       onMouseLeave={() => { onHover(null); setShowTooltip(false); }}
     >
@@ -1646,10 +1650,11 @@ function CalendarSwimLaneRow({ totalWidth, rowH, columns, colWidth }: { totalWid
 
 // ─── Calendar: Task Row ───────────────────────────────────────────────────────
 
-function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, isHalf, preview, onHover, onRowClick, onDragStart, onBarClick, today }: {
+function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, isHalf, preview, subgroupTint, onHover, onRowClick, onDragStart, onBarClick, today }: {
   task: GanttTask; project: Project; rowH: number; totalWidth: number; calStartDate: Date; ppd: number;
   columns: Date[]; colWidth: number; isHovered: boolean; isHalf: boolean;
   preview?: { startDate: string | null; endDate: string | null };
+  subgroupTint?: string;
   onHover: (id: string | null) => void;
   onRowClick: (e: React.MouseEvent<HTMLDivElement>, task: GanttTask, el: HTMLDivElement) => void;
   onDragStart: (e: React.MouseEvent, kind: 'move-task' | 'resize-left' | 'resize-right') => void;
@@ -1661,7 +1666,7 @@ function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, c
   return (
     <div
       ref={rowRef}
-      style={{ height: rowH, width: totalWidth, position: 'relative', background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)', borderBottom: '1px solid var(--border)', cursor: isUnplaced ? 'crosshair' : 'default', transition: 'background 0.1s', display: 'flex' }}
+      style={{ height: rowH, width: totalWidth, position: 'relative', background: isHovered ? 'var(--bg-row-hover)' : (subgroupTint ?? 'var(--bg-surface)'), borderBottom: '1px solid var(--border)', cursor: isUnplaced ? 'crosshair' : 'default', transition: 'background 0.1s', display: 'flex' }}
       onMouseEnter={() => onHover(task.id)}
       onMouseLeave={() => onHover(null)}
       onClick={e => { if (rowRef.current) onRowClick(e, task, rowRef.current); }}
@@ -1685,9 +1690,9 @@ function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, c
 
 // ─── Calendar: Milestones Row ─────────────────────────────────────────────────
 
-function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, onHover, onRowClick, onMilestoneDragStart, onMilestoneLabelClick, milestoneRow, dragPreview, today }: {
+function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, subgroupTint, onHover, onRowClick, onMilestoneDragStart, onMilestoneLabelClick, milestoneRow, dragPreview, today }: {
   milestones: GanttMilestone[]; project: Project; rowH: number; totalWidth: number; calStartDate: Date; ppd: number;
-  columns: Date[]; colWidth: number; isHovered: boolean; onHover: (key: string | null) => void;
+  columns: Date[]; colWidth: number; isHovered: boolean; subgroupTint?: string; onHover: (key: string | null) => void;
   onRowClick: (e: React.MouseEvent<HTMLDivElement>, milestones: GanttMilestone[], el: HTMLDivElement) => void;
   onMilestoneDragStart: (e: React.MouseEvent, milestone: GanttMilestone) => void;
   onMilestoneLabelClick: (e: React.MouseEvent, milestone: GanttMilestone) => void;
@@ -1701,7 +1706,7 @@ function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStart
   return (
     <div
       ref={rowRef}
-      style={{ height: rowH, width: totalWidth, position: 'relative', background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)', borderBottom: '1px solid var(--border)', cursor: hasUnplaced ? 'crosshair' : 'default', transition: 'background 0.1s', display: 'flex' }}
+      style={{ height: rowH, width: totalWidth, position: 'relative', background: isHovered ? 'var(--bg-row-hover)' : (subgroupTint ?? 'var(--bg-surface)'), borderBottom: '1px solid var(--border)', cursor: hasUnplaced ? 'crosshair' : 'default', transition: 'background 0.1s', display: 'flex' }}
       onMouseEnter={() => onHover(hoverKey)}
       onMouseLeave={() => onHover(null)}
       onClick={e => { if (rowRef.current) onRowClick(e, milestones, rowRef.current); }}
@@ -2014,9 +2019,9 @@ const LeftPanelSubgroupHeader = React.forwardRef<HTMLDivElement, {
         paddingLeft: 20,
         paddingRight: 8,
         gap: 6,
-        background: isDragOver ? project.color + '30' : project.color + '14',
-        borderBottom: '1px solid var(--border)',
-        borderLeft: `3px solid ${project.color}${isDragOver ? 'cc' : '60'}`,
+        background: isDragOver ? project.color + '30' : project.color + '16',
+        borderBottom: '1px solid ' + project.color + '28',
+        borderLeft: `3px solid ${project.color}${isDragOver ? 'dd' : '80'}`,
         cursor: 'pointer',
         userSelect: 'none',
         transition: 'background 0.1s',
@@ -2074,8 +2079,8 @@ function CalendarSubgroupRow({ subgroup, project, totalWidth, rowH, columns, col
     <div style={{
       height: rowH,
       width: totalWidth,
-      background: project.color + '14',
-      borderBottom: '1px solid var(--border)',
+      background: project.color + '0e',
+      borderBottom: '1px solid ' + project.color + '22',
       display: 'flex',
       position: 'relative',
     }}>
@@ -2127,7 +2132,7 @@ const LeftPanelTaskRowGroup = React.forwardRef<HTMLDivElement, {
     <div
       ref={ref}
       style={{ height: rowH, display: 'flex', alignItems: 'center', paddingLeft: 8, paddingRight: 8, gap: 6,
-        background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)',
+        background: isHovered ? 'var(--bg-row-hover)' : (row.subgroup ? row.project.color + '12' : 'var(--bg-surface)'),
         borderBottom: '1px solid var(--border)', transition: 'background 0.1s', position: 'relative' }}
       onMouseEnter={() => onHover(key)}
       onMouseLeave={() => onHover(null)}
@@ -2201,7 +2206,7 @@ LeftPanelTaskRowGroup.displayName = 'LeftPanelTaskRowGroup';
 // ─── Calendar: Task Row Group ─────────────────────────────────────────────────
 // Renders multiple task bars stacked vertically within a single ROW_H row
 
-function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, onHover, onBarClick, onRowClick, onDragStart, dragPreview, today }: {
+function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, subgroupTint, onHover, onBarClick, onRowClick, onDragStart, dragPreview, today }: {
   tasks: GanttTask[]; taskRow: TaskRow; project: Project;
   rowH: number; totalWidth: number; calStartDate: Date; ppd: number;
   columns: Date[]; colWidth: number; isHovered: boolean;
@@ -2225,7 +2230,7 @@ function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calSt
     <div
       ref={rowRef}
       style={{ height: rowH, width: totalWidth, position: 'relative',
-        background: isHovered ? 'var(--bg-row-hover)' : 'var(--bg-surface)',
+        background: isHovered ? 'var(--bg-row-hover)' : (subgroupTint ?? 'var(--bg-surface)'),
         borderBottom: '1px solid var(--border)', display: 'flex', transition: 'background 0.1s',
         cursor: hasUnplaced ? 'crosshair' : 'default' }}
       onMouseEnter={() => onHover(key)}
