@@ -615,6 +615,23 @@ export default function GanttChart() {
       const isTopLevel = (i: typeof items[0]) =>
         i.projectId === project.id && (!i.subgroupId || !validSgIds.has(i.subgroupId));
 
+      // Project-level milestone rows — render FIRST (at top of project)
+      const topMilestones = (items.filter(i => isTopLevel(i) && i.type === 'milestone') as GanttMilestone[])
+        .sort((a,b) => (a.order??0)-(b.order??0));
+      const projectMilestoneRows = milestoneRows.filter(r => r.projectId === project.id && (r.subgroupId ?? null) === null);
+      if (projectMilestoneRows.length === 0) {
+        if (topMilestones.length > 0) result.push({ kind: 'milestones', milestones: topMilestones, project });
+      } else {
+        for (const mRow of projectMilestoneRows) {
+          const rowMilestones = topMilestones.filter(m => m.milestoneRowId === mRow.id);
+          if (rowMilestones.length > 0)
+            result.push({ kind: 'milestones', milestones: rowMilestones, project, milestoneRow: mRow });
+        }
+        const validRowIds = new Set(projectMilestoneRows.map(r => r.id));
+        const unassigned = topMilestones.filter(m => !m.milestoneRowId || !validRowIds.has(m.milestoneRowId));
+        if (unassigned.length > 0) result.push({ kind: 'milestones', milestones: unassigned, project });
+      }
+
       // Task rows scoped to project level (subgroupId = null)
       const projectTaskRows = taskRows.filter(r => r.projectId === project.id && (r.subgroupId ?? null) === null);
       const validTaskRowIds = new Set(projectTaskRows.map(r => r.id));
@@ -641,23 +658,6 @@ export default function GanttChart() {
           i.projectId === project.id && i.type === 'task' && i.taskRowId === tRow.id
         ) as GanttTask[]).sort((a,b) => (a.order??0)-(b.order??0));
         result.push({ kind: 'taskrow', tasks: rowTasks, project, taskRow: tRow });
-      }
-
-      // Project-level milestone rows (subgroupId=null) render LAST
-      const topMilestones = (items.filter(i => isTopLevel(i) && i.type === 'milestone') as GanttMilestone[])
-        .sort((a,b) => (a.order??0)-(b.order??0));
-      const projectMilestoneRows = milestoneRows.filter(r => r.projectId === project.id && (r.subgroupId ?? null) === null);
-      if (projectMilestoneRows.length === 0) {
-        if (topMilestones.length > 0) result.push({ kind: 'milestones', milestones: topMilestones, project });
-      } else {
-        for (const mRow of projectMilestoneRows) {
-          const rowMilestones = topMilestones.filter(m => m.milestoneRowId === mRow.id);
-          if (rowMilestones.length > 0)
-            result.push({ kind: 'milestones', milestones: rowMilestones, project, milestoneRow: mRow });
-        }
-        const validRowIds = new Set(projectMilestoneRows.map(r => r.id));
-        const unassigned = topMilestones.filter(m => !m.milestoneRowId || !validRowIds.has(m.milestoneRowId));
-        if (unassigned.length > 0) result.push({ kind: 'milestones', milestones: unassigned, project });
       }
     }
     return result;
