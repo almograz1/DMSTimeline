@@ -235,9 +235,9 @@ export default function GanttChart() {
   const { projects, subgroups, items, vacations, milestoneRows, taskRows, viewMode, calendarStart, calendarDays } = state;
 
   // ── Zoom — must be declared before ppd/colWidth which depend on zoomScale ──
-  const ZOOM_LEVELS  = [0.8, 1.0, 1.2] as const;
-  const ZOOM_LABELS  = ['80%', '100%', '120%'] as const;
-  const [zoomIdx, setZoomIdx] = useState(1); // default = 100%
+  const ZOOM_LEVELS  = [0.6, 0.8, 1.0, 1.2] as const;
+  const ZOOM_LABELS  = ['60%', '80%', '100%', '120%'] as const;
+  const [zoomIdx, setZoomIdx] = useState(2); // default = 100%
   const zoomScale = ZOOM_LEVELS[zoomIdx];
 
   const today        = formatDate(new Date());
@@ -1047,7 +1047,7 @@ export default function GanttChart() {
 
             {rows.map(row => {
               if (row.kind === 'header') {
-                return <CalendarSwimLaneRow key={row.project.id} totalWidth={totalCalWidth} rowH={ROW_H} columns={columns} colWidth={colWidth} />;
+                return <CalendarSwimLaneRow key={row.project.id} project={row.project} totalWidth={totalCalWidth} rowH={ROW_H} columns={columns} colWidth={colWidth} />;
               }
 
               if (row.kind === 'item') {
@@ -1177,12 +1177,12 @@ export default function GanttChart() {
         <div style={{
           position: 'fixed', left: Math.min(vacMenu.x, window.innerWidth - 220), top: Math.min(vacMenu.y, window.innerHeight - 200),
           zIndex: 200, background: 'var(--bg-surface)', border: '1px solid var(--border)',
-          borderRadius: 8, boxShadow: '0 4px 20px rgba(0,0,0,0.15)',
-          padding: 4, minWidth: 200,
+          borderRadius: 10, boxShadow: '0 8px 32px rgba(0,0,0,0.16), 0 2px 8px rgba(0,0,0,0.08)',
+          padding: 4, minWidth: 210,
         }}>
           {/* Date + project label */}
-          <div style={{ padding: '4px 12px 6px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', marginBottom: 4 }}>
-            <div>📅 {vacMenu.date}</div>
+          <div style={{ padding: '6px 12px 8px', fontSize: 11, color: 'var(--text-muted)', borderBottom: '1px solid var(--border)', marginBottom: 4 }}>
+            <div style={{ fontWeight: 500, letterSpacing: '0.02em' }}>📅 {vacMenu.date}</div>
             {vacMenu.projectId && (() => {
               const p = projects.find(p => p.id === vacMenu.projectId);
               return p ? <div style={{ marginTop: 2, display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -1243,13 +1243,13 @@ export default function GanttChart() {
           onClick={e => e.stopPropagation()}
           style={{
             position: 'fixed',
-            left: Math.min(quickAdd.x, window.innerWidth - 300),
-            top: Math.min(quickAdd.y, window.innerHeight - 240),
-            width: 280,
+            left: Math.min(quickAdd.x, window.innerWidth - 305),
+            top: Math.min(quickAdd.y, window.innerHeight - 260),
+            width: 290,
             background: 'var(--bg-surface)',
             border: '1.5px solid var(--accent)',
-            borderRadius: 10,
-            boxShadow: '0 8px 32px rgba(0,0,0,0.18)',
+            borderRadius: 12,
+            boxShadow: '0 12px 40px rgba(0,0,0,0.18), 0 3px 10px rgba(0,0,0,0.08)',
             padding: 16,
             display: 'flex', flexDirection: 'column', gap: 12,
           }}
@@ -1484,7 +1484,7 @@ const LeftPanelHeader = React.forwardRef<HTMLDivElement, {
       ref={ref}
       style={{
         height: rowH, display: 'flex', alignItems: 'center',
-        paddingLeft: 6, paddingRight: 8, gap: 4,
+        paddingLeft: 4, paddingRight: 8, gap: 0,
         background: isDragOver ? project.color + '18' : 'var(--bg-swimlane)',
         borderBottom: '1px solid var(--border)',
         userSelect: 'none', transition: 'background 0.1s',
@@ -1494,10 +1494,10 @@ const LeftPanelHeader = React.forwardRef<HTMLDivElement, {
     >
       <GripHandle onMouseDown={onGripMouseDown} />
       <span
-        style={{ fontSize: 9, color: project.color, transform: project.collapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', display: 'inline-block', flexShrink: 0, cursor: 'pointer' }}
+        style={{ fontSize: 9, color: project.color, transform: project.collapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', display: 'inline-block', flexShrink: 0, cursor: 'pointer', marginRight: 5 }}
         onClick={onToggle}
       >▼</span>
-      <div style={{ width: 11, height: 11, borderRadius: 4, background: project.color, flexShrink: 0, boxShadow: '0 1px 3px ' + project.color + '66' }} />
+      <div style={{ width: 11, height: 11, borderRadius: 4, background: project.color, flexShrink: 0, boxShadow: '0 1px 3px ' + project.color + '66', marginRight: 7 }} />
       <span
         style={{ flex: 1, fontWeight: 700, fontSize: 12.5, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', letterSpacing: '-0.01em' }}
         onClick={onToggle}
@@ -1527,16 +1527,19 @@ const LeftPanelTaskRow = React.forwardRef<HTMLDivElement, {
       ref={ref}
       style={{
         height: rowH, display: 'flex', alignItems: 'center',
-        paddingLeft: 6, paddingRight: 8, gap: 4,
+        paddingLeft: 4, paddingRight: 8, gap: 0,
         background: isHovered ? 'var(--bg-row-hover)' : (subgroupTint ?? 'var(--bg-surface)'),
         borderBottom: '1px solid var(--border)', transition: 'background 0.1s',
+        borderLeft: row.subgroup ? '3px solid ' + project.color + '50' : 'none',
+        paddingLeft: row.subgroup ? 4 : 7,
       }}
       onMouseEnter={() => onHover(item.id)}
       onMouseLeave={() => onHover(null)}
     >
       <GripHandle onMouseDown={onGripMouseDown} />
-      <div style={{ width: 12, height: 5, background: (item as any).color ?? project.color, borderRadius: 2, flexShrink: 0 }} />
-      <span style={{ flex: 1, fontSize: 12, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+      <div style={{ width: row.subgroup ? 24 : 20, flexShrink: 0 }} />
+      <div style={{ width: 10, height: 10, background: (item as any).color ?? project.color, borderRadius: '50%', flexShrink: 0, marginRight: 7, boxShadow: '0 1px 3px ' + ((item as any).color ?? project.color) + '55' }} />
+      <span style={{ flex: 1, fontSize: row.subgroup ? 11.5 : 12, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {item.name}
       </span>
       {isHovered && (
@@ -1570,15 +1573,19 @@ const LeftPanelMilestonesRow = React.forwardRef<HTMLDivElement, {
   return (
     <div
       ref={ref}
-      style={{ height: rowH, display: 'flex', alignItems: 'center', paddingLeft: 8, paddingRight: 8, gap: 6, position: 'relative',
-        background: isHovered ? 'var(--bg-row-hover)' : (row.subgroup ? row.project.color + '12' : 'var(--bg-surface)'), borderBottom: '1px solid var(--border)', transition: 'background 0.1s' }}
+      style={{ height: rowH, display: 'flex', alignItems: 'center', paddingLeft: 4, paddingRight: 8, gap: 0, position: 'relative',
+        background: isHovered ? 'var(--bg-row-hover)' : (row.subgroup ? row.project.color + '12' : 'var(--bg-surface)'),
+        borderBottom: '1px solid var(--border)', transition: 'background 0.1s',
+        borderLeft: row.subgroup ? '3px solid ' + row.project.color + '50' : 'none',
+        paddingLeft: row.subgroup ? 4 : 7 }}
       onMouseEnter={() => { onHover(rowKey); setShowTooltip(true); }}
       onMouseLeave={() => { onHover(null); setShowTooltip(false); }}
     >
       {/* Grip handle — only for named milestone rows */}
-      {onGripMouseDown ? <GripHandle onMouseDown={onGripMouseDown} /> : <div style={{ width: 16, flexShrink: 0 }} />}
+      {onGripMouseDown ? <GripHandle onMouseDown={onGripMouseDown} /> : <div style={{ width: 18, flexShrink: 0 }} />}
+      <div style={{ width: row.subgroup ? 24 : 20, flexShrink: 0 }} />{/* indent */}
       {/* Icon */}
-      <span style={{ fontSize: 12, flexShrink: 0 }}>{icon}</span>
+      <span style={{ fontSize: 11, flexShrink: 0, marginRight: 6 }}>{icon}</span>
 
       {/* Label */}
       <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -1638,12 +1645,17 @@ LeftPanelMilestonesRow.displayName = 'LeftPanelMilestonesRow';
 
 // ─── Calendar: Background Row ─────────────────────────────────────────────────
 
-function CalendarSwimLaneRow({ totalWidth, rowH, columns, colWidth }: { totalWidth: number; rowH: number; columns: Date[]; colWidth: number }) {
+function CalendarSwimLaneRow({ totalWidth, rowH, columns, colWidth, project }: { totalWidth: number; rowH: number; columns: Date[]; colWidth: number; project: import('../types').Project }) {
   return (
-    <div style={{ height: rowH, width: totalWidth, background: 'var(--bg-swimlane)', borderBottom: '1px solid var(--border)', display: 'flex' }}>
+    <div style={{ height: rowH, width: totalWidth, background: project.color + '08', borderBottom: '1px solid ' + project.color + '20', display: 'flex', position: 'relative' }}>
       {columns.map((col, i) => (
-        <div key={i} style={{ width: colWidth, height: '100%', borderRight: '1px solid var(--border)', background: isWeekend(col) && colWidth < 50 ? '#f9fafb' : 'transparent' }} />
+        <div key={i} style={{ width: colWidth, height: '100%', flexShrink: 0, borderRight: '1px solid var(--border)', background: isWeekend(col) && colWidth < 50 ? 'rgba(0,0,0,0.02)' : 'transparent' }} />
       ))}
+      {/* Subtle project name watermark */}
+      <div style={{ position: 'absolute', left: 10, top: 0, bottom: 0, display: 'flex', alignItems: 'center', pointerEvents: 'none', gap: 6 }}>
+        <div style={{ width: 6, height: 6, borderRadius: 2, background: project.color, opacity: 0.5 }} />
+        <span style={{ fontSize: 10, fontWeight: 700, color: project.color, opacity: 0.4, textTransform: 'uppercase', letterSpacing: '0.08em' }}>{project.name}</span>
+      </div>
     </div>
   );
 }
@@ -1984,14 +1996,15 @@ function CtxMenuItem({ icon, label, onClick }: { icon: string; label: string; on
     <button
       onClick={onClick}
       style={{
-        width: '100%', padding: '7px 12px', borderRadius: 6, textAlign: 'left',
-        fontSize: 13, display: 'flex', alignItems: 'center', gap: 8,
+        width: '100%', padding: '8px 12px', borderRadius: 7, textAlign: 'left',
+        fontSize: 13, fontWeight: 500, display: 'flex', alignItems: 'center', gap: 9,
         color: 'var(--text-primary)', background: 'transparent', transition: 'background 0.1s',
+        fontFamily: 'var(--font)',
       }}
-      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-row-hover)')}
-      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--bg-row-hover)'; (e.currentTarget as HTMLElement).style.color = 'var(--accent)'; }}
+      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent'; (e.currentTarget as HTMLElement).style.color = 'var(--text-primary)'; }}
     >
-      <span style={{ fontSize: 12, width: 16, textAlign: 'center', flexShrink: 0 }}>{icon}</span>
+      <span style={{ fontSize: 12, width: 18, textAlign: 'center', flexShrink: 0, opacity: 0.7 }}>{icon}</span>
       {label}
     </button>
   );
@@ -2016,9 +2029,9 @@ const LeftPanelSubgroupHeader = React.forwardRef<HTMLDivElement, {
         height: rowH,
         display: 'flex',
         alignItems: 'center',
-        paddingLeft: 20,
+        paddingLeft: 4,
         paddingRight: 8,
-        gap: 6,
+        gap: 0,
         background: isDragOver ? project.color + '30' : project.color + '16',
         borderBottom: '1px solid ' + project.color + '28',
         borderLeft: `3px solid ${project.color}${isDragOver ? 'dd' : '80'}`,
@@ -2030,21 +2043,27 @@ const LeftPanelSubgroupHeader = React.forwardRef<HTMLDivElement, {
       onMouseLeave={() => setShowDelete(false)}
       onClick={onToggle}
     >
+      {/* 18px placeholder to align with GripHandle in other rows */}
+      <div style={{ width: 18, flexShrink: 0 }} />
+      {/* 12px indent for level 2 */}
+      <div style={{ width: 12, flexShrink: 0 }} />
+
       {/* Collapse arrow */}
       <span style={{
         fontSize: 8, color: project.color,
         transform: subgroup.collapsed ? 'rotate(-90deg)' : 'rotate(0deg)',
-        transition: 'transform 0.15s', display: 'inline-block', flexShrink: 0,
+        transition: 'transform 0.15s', display: 'inline-block', flexShrink: 0, marginRight: 5,
       }}>▼</span>
 
       {/* Subgroup icon */}
-      <span style={{ fontSize: 11, color: project.color, flexShrink: 0 }}>▤</span>
+      <span style={{ fontSize: 11, color: project.color, flexShrink: 0, marginRight: 6, opacity: 0.85 }}>▤</span>
 
       {/* Name */}
       <span style={{
-        flex: 1, fontWeight: 600, fontSize: 11,
-        color: 'var(--text-primary)',
+        flex: 1, fontWeight: 700, fontSize: 11.5,
+        color: project.color,
         overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+        letterSpacing: '-0.01em',
       }}>
         {subgroup.name}
       </span>
@@ -2131,20 +2150,23 @@ const LeftPanelTaskRowGroup = React.forwardRef<HTMLDivElement, {
   return (
     <div
       ref={ref}
-      style={{ height: rowH, display: 'flex', alignItems: 'center', paddingLeft: 8, paddingRight: 8, gap: 6,
+      style={{ height: rowH, display: 'flex', alignItems: 'center', paddingLeft: 4, paddingRight: 8, gap: 0,
         background: isHovered ? 'var(--bg-row-hover)' : (row.subgroup ? row.project.color + '12' : 'var(--bg-surface)'),
-        borderBottom: '1px solid var(--border)', transition: 'background 0.1s', position: 'relative' }}
+        borderBottom: '1px solid var(--border)', transition: 'background 0.1s', position: 'relative',
+        borderLeft: row.subgroup ? '3px solid ' + row.project.color + '50' : 'none',
+        paddingLeft: row.subgroup ? 4 : 7 }}
       onMouseEnter={() => onHover(key)}
       onMouseLeave={() => onHover(null)}
     >
       {/* Grip handle */}
       <GripHandle onMouseDown={onGripMouseDown} />
+      <div style={{ width: row.subgroup ? 24 : 20, flexShrink: 0 }} />{/* indent */}
 
       {/* Color dot — click to pick row color */}
       <div
         onClick={e => { e.stopPropagation(); setShowColorPicker(v => !v); }}
         title="Set row color"
-        style={{ width: 12, height: 12, borderRadius: '50%', background: rowColor, flexShrink: 0, cursor: 'pointer', border: '1.5px solid rgba(0,0,0,0.1)' }}
+        style={{ width: 11, height: 11, borderRadius: '50%', background: rowColor, flexShrink: 0, cursor: 'pointer', border: '1.5px solid rgba(0,0,0,0.1)', marginRight: 7 }}
       />
 
       {/* Color picker popup */}
