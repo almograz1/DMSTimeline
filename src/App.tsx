@@ -207,24 +207,24 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow,
 
       {/* Navigation */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <TIconBtn onClick={() => pan(-(viewMode === 'weekly' ? 28 : 14))}>‹‹</TIconBtn>
+        <TIconBtn onClick={() => pan(-(viewMode === 'monthly' ? 90 : viewMode === 'weekly' ? 28 : 14))}>‹‹</TIconBtn>
         <TIconBtn onClick={() => pan(-(viewMode === 'weekly' ? 7  : 1 ))}>‹</TIconBtn>
         <TIconBtn onClick={() => dispatch({ type: 'GO_TO_TODAY' })} label="Today" />
         <TIconBtn onClick={() => pan(+(viewMode === 'weekly' ? 7  : 1 ))}>›</TIconBtn>
-        <TIconBtn onClick={() => pan(+(viewMode === 'weekly' ? 28 : 14))}>››</TIconBtn>
+        <TIconBtn onClick={() => pan(+(viewMode === 'monthly' ? 90 : viewMode === 'weekly' ? 28 : 14))}>››</TIconBtn>
       </div>
 
       <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
 
       {/* View toggle */}
       <div style={{ display: 'flex', background: 'rgba(255,255,255,0.07)', borderRadius: 7, padding: 2, gap: 2 }}>
-        {(['daily', 'weekly'] as const).map(mode => (
+        {(['daily', 'weekly', 'monthly'] as const).map(mode => (
           <button key={mode} onClick={() => dispatch({ type: 'SET_VIEW_MODE', viewMode: mode })}
             style={{ padding: '4px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600,
               background: viewMode === mode ? 'rgba(255,255,255,0.15)' : 'transparent',
               color: viewMode === mode ? '#fff' : 'var(--toolbar-text)', transition: 'background 0.15s',
             }}>
-            {mode === 'daily' ? '☀ Day' : '📅 Week'}
+            {mode === 'daily' ? '☀ Day' : mode === 'weekly' ? '📅 Week' : '🗓 Month'}
           </button>
         ))}
       </div>
@@ -286,21 +286,21 @@ function NoTimelines() {
   }
 
   return (
-    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 20, color: 'var(--text-muted)' }}>
-      <div style={{ fontSize: 48 }}>📅</div>
+    <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 28 }}>
       <div style={{ textAlign: 'center' }}>
-        <p style={{ fontWeight: 700, fontSize: 18, color: 'var(--text-primary)', marginBottom: 8 }}>No timelines yet</p>
-        <p style={{ fontSize: 14 }}>Create your first timeline to get started.</p>
+        <div style={{ fontSize: 52, marginBottom: 20, filter: 'grayscale(0.2)' }}>📅</div>
+        <p style={{ fontWeight: 800, fontSize: 20, color: 'var(--text-primary)', marginBottom: 8, letterSpacing: '-0.02em' }}>No timelines yet</p>
+        <p style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.5 }}>Create your first timeline to start planning.</p>
       </div>
-      <div style={{ display: 'flex', gap: 8 }}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
         <input
           autoFocus
           value={name}
           onChange={e => setName(e.target.value)}
           onKeyDown={e => e.key === 'Enter' && handleCreate()}
-          placeholder="Timeline name (e.g. Q2 Roadmap)"
+          placeholder="e.g. Q2 Product Roadmap"
           className="form-input"
-          style={{ width: 240 }}
+          style={{ width: 260 }}
         />
         <button onClick={handleCreate} className="btn-primary">Create</button>
       </div>
@@ -321,7 +321,7 @@ function AppInner() {
 
   if (loading) {
     return (
-      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-app)', gap: 16 }}>
+      <div style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'var(--bg-app)', gap: 20 }}>
         <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         <div style={{ width: 36, height: 36, border: '3px solid var(--border)', borderTopColor: 'var(--accent)', borderRadius: '50%', animation: 'spin 0.7s linear infinite' }} />
         <span style={{ color: 'var(--text-secondary)', fontSize: 13 }}>Loading…</span>

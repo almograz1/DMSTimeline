@@ -94,6 +94,22 @@ export function buildWeeklyColumns(calStart: Date, weekCount: number): Date[] {
 }
 
 /**
+ * Build an array of first-day-of-month Date objects for monthly-view columns.
+ * Starts at the 1st of the month containing calStart.
+ */
+export function buildMonthlyColumns(calStart: Date, monthCount: number): Date[] {
+  const first = new Date(calStart.getFullYear(), calStart.getMonth(), 1);
+  return Array.from({ length: monthCount }, (_, i) => {
+    return new Date(first.getFullYear(), first.getMonth() + i, 1);
+  });
+}
+
+/** Number of days in a given month */
+export function daysInMonth(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+}
+
+/**
  * Compute the default calendar window: 2 months before today through 22 months after.
  * 24 months total ≈ 730 days. Starts on the Monday of the week 2 months back.
  */

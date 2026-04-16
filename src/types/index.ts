@@ -1,4 +1,4 @@
-export type ViewMode = 'daily' | 'weekly';
+export type ViewMode = 'daily' | 'weekly' | 'monthly';
 
 /** Timeline is a named workspace owned by one user */
 export interface Timeline {

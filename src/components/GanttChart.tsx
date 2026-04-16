@@ -3,7 +3,7 @@ import { useGantt } from '../context/GanttContext';
 import type { CalendarRow, GanttTask, GanttMilestone, Project, Subgroup, MilestoneRow, TaskRow } from '../types';
 import {
   parseDate, formatDate, addDays, dayDiff,
-  buildDailyColumns, buildWeeklyColumns,
+  buildDailyColumns, buildWeeklyColumns, buildMonthlyColumns, daysInMonth,
   getISOWeekNumber, getDayName, getMonthName,
   isWeekend,
 } from '../utils/dateUtils';
@@ -16,14 +16,17 @@ const MILESTONE_ROW_H  = 56;
 const HEADER_H         = 60;
 const DAILY_COL_W      = 44;
 const WEEKLY_COL_W     = 120;
+const MONTHLY_COL_W    = 160;
 const TASK_BAR_H       = 22;
 const MILESTONE_SZ     = 14;
 const MILESTONE_NAME_H = 16;
 const LABEL_W          = 90;
 const HANDLE_W         = 6;
 
-function pxPerDay(viewMode: 'daily' | 'weekly'): number {
-  return viewMode === 'daily' ? DAILY_COL_W : WEEKLY_COL_W / 7;
+function pxPerDay(viewMode: 'daily' | 'weekly' | 'monthly'): number {
+  if (viewMode === 'daily')   return DAILY_COL_W;
+  if (viewMode === 'monthly') return MONTHLY_COL_W / 30.44; // approx px per day
+  return WEEKLY_COL_W / 7;
 }
 
 // ─── Calendar Drag Types ──────────────────────────────────────────────────────
@@ -162,8 +165,40 @@ function MilestoneWithLabel({ milestone, color, calStart, ppd, previewDate, onDr
 // ─── Calendar Header ──────────────────────────────────────────────────────────
 
 function CalendarHeader({ columns, viewMode, colWidth, todayDate }: {
-  columns: Date[]; viewMode: 'daily' | 'weekly'; colWidth: number; todayDate: string;
+  columns: Date[]; viewMode: 'daily' | 'weekly' | 'monthly'; colWidth: number; todayDate: string;
 }) {
+  // For monthly view: top row = year, bottom row = month name
+  // For weekly/daily: top row = month+year spans, bottom row = week/day
+  if (viewMode === 'monthly') {
+    const yearSpans: { label: string; count: number }[] = [];
+    columns.forEach(col => {
+      const label = String(col.getFullYear());
+      if (yearSpans.length && yearSpans[yearSpans.length - 1].label === label) yearSpans[yearSpans.length - 1].count++;
+      else yearSpans.push({ label, count: 1 });
+    });
+    const todayMonth = new Date().getMonth();
+    const todayYear  = new Date().getFullYear();
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: HEADER_H, borderBottom: '1.5px solid var(--border-strong)', background: 'var(--bg-header)', position: 'sticky', top: 0, zIndex: 5 }}>
+        <div style={{ display: 'flex', height: 24, borderBottom: '1px solid var(--border)' }}>
+          {yearSpans.map(({ label, count }) => (
+            <div key={label} style={{ width: count * colWidth, flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 10, fontSize: 10.5, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.06em', textTransform: 'uppercase', borderRight: '1px solid var(--border)', overflow: 'hidden' }}>{label}</div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', flex: 1 }}>
+          {columns.map((col, i) => {
+            const isCurrentMonth = col.getMonth() === todayMonth && col.getFullYear() === todayYear;
+            return (
+              <div key={i} style={{ width: colWidth, flexShrink: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', borderRight: '1px solid var(--border)', fontSize: 11, fontWeight: isCurrentMonth ? 700 : 500, color: isCurrentMonth ? 'var(--accent)' : 'var(--text-primary)', background: isCurrentMonth ? 'var(--accent-light)' : 'transparent', overflow: 'hidden' }}>
+                <span style={{ fontSize: 11, fontWeight: isCurrentMonth ? 700 : 500 }}>{getMonthName(col)}</span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   const monthSpans: { label: string; count: number }[] = [];
   columns.forEach(col => {
     const label = `${getMonthName(col)} ${col.getFullYear()}`;
@@ -243,8 +278,8 @@ export default function GanttChart() {
   const today        = formatDate(new Date());
   const calStartDate = parseDate(calendarStart);
   const ppd          = pxPerDay(viewMode) * zoomScale;
-  const colWidth     = (viewMode === 'daily' ? DAILY_COL_W : WEEKLY_COL_W) * zoomScale;
-  const numCols      = viewMode === 'daily' ? calendarDays : Math.ceil(calendarDays / 7);
+  const colWidth     = (viewMode === 'daily' ? DAILY_COL_W : viewMode === 'monthly' ? MONTHLY_COL_W : WEEKLY_COL_W) * zoomScale;
+  const numCols      = viewMode === 'daily' ? calendarDays : viewMode === 'monthly' ? Math.ceil(calendarDays / 30) + 2 : Math.ceil(calendarDays / 7);
 
   // ── Calendar drag (move/resize bars) ─────────────────────────────────────────
 
@@ -665,7 +700,11 @@ export default function GanttChart() {
   rowsRef.current = rows;
 
   const columns = useMemo(
-    () => viewMode === 'daily' ? buildDailyColumns(calStartDate, numCols) : buildWeeklyColumns(calStartDate, numCols),
+    () => {
+      if (viewMode === 'daily')   return buildDailyColumns(calStartDate, numCols);
+      if (viewMode === 'monthly') return buildMonthlyColumns(calStartDate, numCols);
+      return buildWeeklyColumns(calStartDate, numCols);
+    },
     [calStartDate, viewMode, numCols]
   );
 
@@ -903,6 +942,7 @@ export default function GanttChart() {
                     isHovered={hoveredKey === key}
                     onHover={setHoveredKey}
                     onUpdateColor={color => dispatch({ type: 'UPDATE_TASK_ROW', taskRowId: row.taskRow.id, patch: { color } })}
+                    onRename={name => dispatch({ type: 'UPDATE_TASK_ROW', taskRowId: row.taskRow.id, patch: { name } })}
                     onDeleteTask={id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
                     onDeleteRow={() => {
                       const rowTasks = items.filter(i => i.type === 'task' && i.taskRowId === row.taskRow.id);
@@ -974,6 +1014,7 @@ export default function GanttChart() {
                       rowMilestones.forEach(m => dispatch({ type: 'DELETE_ITEM', itemId: m.id }));
                       dispatch({ type: 'DELETE_MILESTONE_ROW', milestoneRowId: row.milestoneRow!.id });
                     } : undefined}
+                    onRename={row.milestoneRow ? name => dispatch({ type: 'UPDATE_MILESTONE_ROW', milestoneRowId: row.milestoneRow!.id, patch: { name } }) : undefined}
                     onGripMouseDown={row.milestoneRow ? e => startRowDrag(e, { kind: 'milestonerow', id: row.milestoneRow!.id, projectId: row.project.id, subgroupId: row.subgroup?.id ?? null }) : undefined}
                   />
                   {showDropAfter && <DropIndicator color={row.project.color} />}
@@ -1552,13 +1593,71 @@ LeftPanelTaskRow.displayName = 'LeftPanelTaskRow';
 
 // ─── Left Panel: Milestones Row ───────────────────────────────────────────────
 
+// ─── Inline Name Editor ──────────────────────────────────────────────────────
+
+function InlineNameEditor({ name, onSave, style }: {
+  name: string;
+  onSave: (name: string) => void;
+  style?: React.CSSProperties;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft]     = useState(name);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  function startEdit(e: React.MouseEvent) {
+    e.stopPropagation();
+    setDraft(name);
+    setEditing(true);
+    setTimeout(() => { inputRef.current?.select(); }, 0);
+  }
+
+  function commit() {
+    const trimmed = draft.trim();
+    if (trimmed && trimmed !== name) onSave(trimmed);
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={e => setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); commit(); } if (e.key === 'Escape') setEditing(false); }}
+        onClick={e => e.stopPropagation()}
+        onMouseDown={e => e.stopPropagation()}
+        style={{
+          flex: 1, fontSize: 11, fontWeight: 600, color: 'var(--text-primary)',
+          background: 'var(--bg-surface)', border: '1.5px solid var(--accent)',
+          borderRadius: 4, padding: '1px 5px', outline: 'none',
+          fontFamily: 'var(--font)', minWidth: 0,
+          ...style,
+        }}
+        autoFocus
+      />
+    );
+  }
+
+  return (
+    <span
+      title="Double-click to rename"
+      onDoubleClick={startEdit}
+      style={{ flex: 1, fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'default', ...style }}
+    >
+      {name}
+    </span>
+  );
+}
+
 const LeftPanelMilestonesRow = React.forwardRef<HTMLDivElement, {
   row: CalendarRow & { kind: 'milestones' }; rowH: number;
   isHovered: boolean; onHover: (key: string | null) => void;
   onDeleteMilestone: (id: string) => void;
   onDeleteRow?: () => void;
   onGripMouseDown?: (e: React.MouseEvent) => void;
-}>(({ row, rowH, isHovered, onHover, onDeleteMilestone, onDeleteRow, onGripMouseDown }, ref) => {
+  onRename?: (name: string) => void;
+}>(({ row, rowH, isHovered, onHover, onDeleteMilestone, onDeleteRow, onGripMouseDown, onRename }, ref) => {
   const { milestones, project, milestoneRow } = row;
   const rowKey        = `ms-${project.id}-${row.subgroup?.id ?? 'top'}-${milestoneRow?.id ?? 'default'}`;
   const unplacedCount = milestones.filter(m => m.date === null).length;
@@ -1587,10 +1686,11 @@ const LeftPanelMilestonesRow = React.forwardRef<HTMLDivElement, {
       {/* Icon */}
       <span style={{ fontSize: 11, flexShrink: 0, marginRight: 6 }}>{icon}</span>
 
-      {/* Label */}
-      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {label}
-      </span>
+      {/* Label — double-click to rename */}
+      <InlineNameEditor
+        name={label}
+        onSave={name => onRename?.(name)}
+      />
 
       {/* Count badges */}
       <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
@@ -2141,7 +2241,8 @@ const LeftPanelTaskRowGroup = React.forwardRef<HTMLDivElement, {
   onDeleteRow: () => void;
   onGripMouseDown: (e: React.MouseEvent) => void;
   onUpdateColor: (color: string | null) => void;
-}>(({ row, rowH, isHovered, onHover, onDeleteTask, onDeleteRow, onGripMouseDown, onUpdateColor }, ref) => {
+  onRename: (name: string) => void;
+}>(({ row, rowH, isHovered, onHover, onDeleteTask, onDeleteRow, onGripMouseDown, onUpdateColor, onRename }, ref) => {
   const { tasks, project, taskRow } = row;
   const key = `tr-${taskRow.id}`;
   const [showColorPicker, setShowColorPicker] = useState(false);
@@ -2183,11 +2284,8 @@ const LeftPanelTaskRowGroup = React.forwardRef<HTMLDivElement, {
         </div>
       )}
 
-      {/* Row name */}
-      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', flex: 1,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-        {taskRow.name}
-      </span>
+      {/* Row name — double-click to rename */}
+      <InlineNameEditor name={taskRow.name} onSave={onRename} />
 
       {/* Task count */}
       <span style={{ fontSize: 10, fontWeight: 600, color: rowColor,

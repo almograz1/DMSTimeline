@@ -65,6 +65,7 @@ type Action =
   | { type: 'LOAD_VACATIONS';          vacations: VacationPeriod[] }
   | { type: 'LOAD_MILESTONE_ROWS';    milestoneRows: MilestoneRow[] }
   | { type: 'ADD_MILESTONE_ROW';      milestoneRow: MilestoneRow }
+  | { type: 'UPDATE_MILESTONE_ROW';   milestoneRowId: string; patch: Partial<MilestoneRow> }
   | { type: 'DELETE_MILESTONE_ROW';   milestoneRowId: string }
   | { type: 'LOAD_TASK_ROWS';         taskRows: TaskRow[] }
   | { type: 'ADD_TASK_ROW';           taskRow: TaskRow }
@@ -209,6 +210,8 @@ function reducer(state: GanttState, action: Action): GanttState {
       };
     case 'LOAD_MILESTONE_ROWS':
       return { ...state, milestoneRows: [...action.milestoneRows].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) };
+    case 'UPDATE_MILESTONE_ROW':
+      return { ...state, milestoneRows: state.milestoneRows.map(r => r.id === action.milestoneRowId ? { ...r, ...action.patch } : r) };
     case 'ADD_MILESTONE_ROW':
       return { ...state, milestoneRows: [...state.milestoneRows, action.milestoneRow] };
     case 'DELETE_MILESTONE_ROW':
@@ -459,6 +462,7 @@ async function syncToFirestore(action: Action, state: GanttState): Promise<void>
     case 'UPDATE_TASK_ROW_ORDER':
       await setDoc(doc(db, TASK_ROWS_COL, action.taskRowId), { order: action.order }, { merge: true });
       break;
+    case 'UPDATE_MILESTONE_ROW':
     case 'REORDER_MILESTONE_ROWS':
     case 'UPDATE_TASK_ROW_ORDER':
     case 'REORDER_TASK_ROWS': {
@@ -486,6 +490,9 @@ async function syncToFirestore(action: Action, state: GanttState): Promise<void>
         await batch.commit();
       break;
     }
+    case 'UPDATE_MILESTONE_ROW':
+      await setDoc(doc(db, MILESTONE_ROWS_COL, action.milestoneRowId), action.patch, { merge: true });
+      break;
     case 'ADD_MILESTONE_ROW':
       await setDoc(doc(db, MILESTONE_ROWS_COL, action.milestoneRow.id), action.milestoneRow);
       break;
