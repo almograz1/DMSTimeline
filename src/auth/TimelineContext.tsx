@@ -7,6 +7,8 @@ import { db } from '../firebase';
 import type { Timeline } from '../types';
 import { useAuth } from './AuthContext';
 
+export type TimelineRole = 'owner' | 'editor' | 'viewer';
+
 interface TimelineContextValue {
   timelines: Timeline[];
   activeTimeline: Timeline | null;
@@ -14,6 +16,8 @@ interface TimelineContextValue {
   createTimeline: (name: string) => Promise<string>;
   deleteTimeline: (id: string) => Promise<void>;
   loading: boolean;
+  currentUserRole: TimelineRole | null;
+  isViewOnly: boolean;
 }
 
 const TimelineContext = createContext<TimelineContextValue | null>(null);
@@ -29,6 +33,8 @@ export function TimelineProvider({ children }: { children: React.ReactNode }) {
   const [timelines, setTimelines]               = useState<Timeline[]>([]);
   const [activeTimelineId, setActiveTimelineId] = useState<string>('');
   const [loading, setLoading]                   = useState(true);
+  // Maps timelineId → role for the current user
+  const [roleMap, setRoleMap] = useState<Record<string, TimelineRole>>({});
 
   useEffect(() => {
     if (!user) {
@@ -70,13 +76,26 @@ export function TimelineProvider({ children }: { children: React.ReactNode }) {
       err => { console.error('owned timelines:', err); merge(); }
     );
 
-    // 2. Timelines shared with me (via timelineMembers)
+    // 2. Timelines shared with me (via timelineMembers) — also captures my role per timeline
     const unsubMembers = onSnapshot(
       query(collection(db, MEMBERS_COL), where('userId', '==', user.uid)),
       async snap => {
-        if (snap.empty) { sharedTls = []; merge(); return; }
-        // Fetch each shared timeline document
-        const ids = snap.docs.map(d => (d.data() as { timelineId: string }).timelineId);
+        if (snap.empty) { sharedTls = []; setRoleMap({}); merge(); return; }
+
+        // Build role map from membership docs
+        const newRoleMap: Record<string, TimelineRole> = {};
+        snap.docs.forEach(d => {
+          const data = d.data() as { timelineId: string; role: TimelineRole };
+          newRoleMap[data.timelineId] = data.role;
+        });
+        setRoleMap(newRoleMap);
+
+        // Fetch each shared timeline document (exclude ones I own — they're already in ownedTls)
+        const ids = snap.docs
+          .map(d => (d.data() as { timelineId: string; role: TimelineRole }))
+          .filter(d => d.role !== 'owner')
+          .map(d => d.timelineId);
+
         const fetched: Timeline[] = [];
         for (const id of ids) {
           const tSnap = await getDocs(query(collection(db, TIMELINES_COL), where('id', '==', id)));
@@ -114,12 +133,15 @@ export function TimelineProvider({ children }: { children: React.ReactNode }) {
     await deleteDoc(doc(db, TIMELINES_COL, id));
   }, []);
 
-  const activeTimeline = timelines.find(t => t.id === activeTimelineId) ?? null;
+  const activeTimeline    = timelines.find(t => t.id === activeTimelineId) ?? null;
+  const currentUserRole   = activeTimelineId ? (roleMap[activeTimelineId] ?? null) : null;
+  const isViewOnly        = currentUserRole === 'viewer';
 
   return (
     <TimelineContext.Provider value={{
       timelines, activeTimeline, setActiveTimelineId,
       createTimeline, deleteTimeline, loading,
+      currentUserRole, isViewOnly,
     }}>
       {children}
     </TimelineContext.Provider>

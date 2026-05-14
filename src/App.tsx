@@ -168,6 +168,7 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow,
   onAddTask: () => void; onAddMilestone: () => void;
 }) {
   const { state, dispatch } = useGantt();
+  const { isViewOnly }      = useTimeline();
   const { viewMode }        = state;
   const hasProjects         = state.projects.length > 0;
   const pan = (days: number) => dispatch({ type: 'PAN_CALENDAR', days });
@@ -191,15 +192,23 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow,
 
       <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 2px' }} />
 
-      {/* Add buttons */}
-      <TBtn onClick={onAddProject}  icon="＋" label="Swim Lane" accent />
-      {hasProjects && (
+      {/* Add buttons — hidden for view-only users */}
+      {isViewOnly ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 7, background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)' }}>
+          <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 700 }}>View Only</span>
+        </div>
+      ) : (
         <>
-          <TBtn onClick={onAddSubgroup}     icon="▤" label="Subgroup" />
-          <TBtn onClick={onAddMilestoneRow} icon="◆" label="M. Row" />
-          <TBtn onClick={onAddTaskRow}     icon="▬▬" label="T. Row" />
-          <TBtn onClick={onAddTask}         icon="▬" label="Task" />
-          <TBtn onClick={onAddMilestone}    icon="◇" label="Milestone" />
+          <TBtn onClick={onAddProject}  icon="＋" label="Swim Lane" accent />
+          {hasProjects && (
+            <>
+              <TBtn onClick={onAddSubgroup}     icon="▤" label="Subgroup" />
+              <TBtn onClick={onAddMilestoneRow} icon="◆" label="M. Row" />
+              <TBtn onClick={onAddTaskRow}     icon="▬▬" label="T. Row" />
+              <TBtn onClick={onAddTask}         icon="▬" label="Task" />
+              <TBtn onClick={onAddMilestone}    icon="◇" label="Milestone" />
+            </>
+          )}
         </>
       )}
 

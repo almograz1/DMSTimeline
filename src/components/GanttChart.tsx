@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useGantt } from '../context/GanttContext';
+import { useTimeline } from '../auth/TimelineContext';
 import type { CalendarRow, GanttTask, GanttMilestone, Project, Subgroup, MilestoneRow, TaskRow } from '../types';
 import {
   parseDate, formatDate, addDays, dayDiff,
@@ -267,6 +268,7 @@ function DropIndicator({ color = 'var(--accent)' }: { color?: string }) {
 
 export default function GanttChart() {
   const { state, dispatch } = useGantt();
+  const { isViewOnly }      = useTimeline();
   const { projects, subgroups, items, vacations, milestoneRows, taskRows, viewMode, calendarStart, calendarDays } = state;
 
   // ── Zoom — must be declared before ppd/colWidth which depend on zoomScale ──
@@ -341,6 +343,7 @@ export default function GanttChart() {
   }, [dispatch, handleCalMouseMove]);
 
   const startCalDrag = useCallback((e: React.MouseEvent, kind: CalDragState['kind'], item: GanttTask | GanttMilestone) => {
+    if (isViewOnly) return;
     e.preventDefault(); e.stopPropagation();
     const t = item as GanttTask;
     const m = item as GanttMilestone;
@@ -839,7 +842,7 @@ export default function GanttChart() {
   // ── Click handlers ────────────────────────────────────────────────────────────
 
   const handleTaskRowClick = useCallback((e: React.MouseEvent<HTMLDivElement>, task: GanttTask, rowEl: HTMLDivElement) => {
-    if (calDragStateRef.current || calDragPreviewRef.current) return;
+    if (isViewOnly || calDragStateRef.current || calDragPreviewRef.current) return;
     const dayOffset   = Math.floor((e.clientX - rowEl.getBoundingClientRect().left) / ppd);
     const clickedDate = formatDate(addDays(calRefDate, dayOffset));
     if (isVacationDate(clickedDate)) return; // blocked by vacation
@@ -852,7 +855,7 @@ export default function GanttChart() {
   }, [calRefDate, ppd, dispatch]);
 
   const handleMilestonesRowClick = useCallback((e: React.MouseEvent<HTMLDivElement>, milestones: GanttMilestone[], rowEl: HTMLDivElement) => {
-    if (calDragStateRef.current || calDragPreviewRef.current) return;
+    if (isViewOnly || calDragStateRef.current || calDragPreviewRef.current) return;
     const firstUnplaced = milestones.find(m => m.date === null);
     if (!firstUnplaced) return;
     const dayOffset   = Math.floor((e.clientX - rowEl.getBoundingClientRect().left) / ppd);
@@ -900,8 +903,8 @@ export default function GanttChart() {
                     }}
                     project={row.project} rowH={ROW_H}
                     onToggle={() => dispatch({ type: 'TOGGLE_COLLAPSE', projectId: row.project.id })}
-                    onDelete={() => dispatch({ type: 'DELETE_PROJECT', projectId: row.project.id })}
-                    onGripMouseDown={e => startRowDrag(e, { kind: 'project', id: row.project.id })}
+                    onDelete={isViewOnly ? undefined : () => dispatch({ type: 'DELETE_PROJECT', projectId: row.project.id })}
+                    onGripMouseDown={isViewOnly ? undefined : e => startRowDrag(e, { kind: 'project', id: row.project.id })}
                     isDragOver={rowDropTarget === key || isTaskDragOnProject}
                   />
                   {showDropAfter && <DropIndicator color={row.project.color} />}
@@ -925,8 +928,8 @@ export default function GanttChart() {
                     row={row} rowH={ROW_H}
                     isHovered={hoveredKey === key}
                     onHover={setHoveredKey}
-                    onDelete={() => dispatch({ type: 'DELETE_ITEM', itemId: row.item.id })}
-                    onGripMouseDown={e => startRowDrag(e, { kind: 'task', id: row.item.id, projectId: row.project.id, subgroupId: row.item.subgroupId ?? null })}
+                    onDelete={isViewOnly ? undefined : () => dispatch({ type: 'DELETE_ITEM', itemId: row.item.id })}
+                    onGripMouseDown={isViewOnly ? undefined : e => startRowDrag(e, { kind: 'task', id: row.item.id, projectId: row.project.id, subgroupId: row.item.subgroupId ?? null })}
                   />
                   {showDropAfter && <DropIndicator color={row.project.color} />}
                 </React.Fragment>
@@ -949,8 +952,8 @@ export default function GanttChart() {
                     onHover={setHoveredKey}
                     onUpdateColor={color => dispatch({ type: 'UPDATE_TASK_ROW', taskRowId: row.taskRow.id, patch: { color } })}
                     onRename={name => dispatch({ type: 'UPDATE_TASK_ROW', taskRowId: row.taskRow.id, patch: { name } })}
-                    onDeleteTask={id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
-                    onDeleteRow={() => {
+                    onDeleteTask={isViewOnly ? undefined : id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
+                    onDeleteRow={isViewOnly ? undefined : () => {
                       const rowTasks = items.filter(i => i.type === 'task' && i.taskRowId === row.taskRow.id);
                       const msg = rowTasks.length > 0
                         ? 'Delete task row ' + row.taskRow.name + ' and its ' + rowTasks.length + ' task' + (rowTasks.length === 1 ? '' : 's') + '? This cannot be undone.'
@@ -959,7 +962,7 @@ export default function GanttChart() {
                       rowTasks.forEach(t => dispatch({ type: 'DELETE_ITEM', itemId: t.id }));
                       dispatch({ type: 'DELETE_TASK_ROW', taskRowId: row.taskRow.id });
                     }}
-                    onGripMouseDown={e => startRowDrag(e, { kind: 'taskrow', id: row.taskRow.id, projectId: row.project.id, subgroupId: row.subgroup?.id ?? null })}
+                    onGripMouseDown={isViewOnly ? undefined : e => startRowDrag(e, { kind: 'taskrow', id: row.taskRow.id, projectId: row.project.id, subgroupId: row.subgroup?.id ?? null })}
                   />
                   {showDropAfter && <DropIndicator color={row.project.color} />}
                 </React.Fragment>
@@ -981,7 +984,7 @@ export default function GanttChart() {
                     rowH={ROW_H}
                     isDragOver={rowDropTarget === key && isTaskDrag}
                     onToggle={() => dispatch({ type: 'TOGGLE_SUBGROUP_COLLAPSE', subgroupId: row.subgroup.id })}
-                    onDelete={() => {
+                    onDelete={isViewOnly ? undefined : () => {
                       const sgItems = items.filter(i => i.subgroupId === row.subgroup.id);
                       if (sgItems.length > 0) {
                         const msg = 'Delete subgroup ' + row.subgroup.name + ' and its ' + sgItems.length + ' item' + (sgItems.length === 1 ? '' : 's') + '? This cannot be undone.';
@@ -1010,8 +1013,8 @@ export default function GanttChart() {
                     row={row} rowH={MILESTONE_ROW_H}
                     isHovered={hoveredKey === rowKey}
                     onHover={setHoveredKey}
-                    onDeleteMilestone={id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
-                    onDeleteRow={row.milestoneRow ? () => {
+                    onDeleteMilestone={isViewOnly ? undefined : id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
+                    onDeleteRow={!isViewOnly && row.milestoneRow ? () => {
                       const rowMilestones = items.filter(i => i.type === 'milestone' && i.milestoneRowId === row.milestoneRow!.id);
                       const msg = rowMilestones.length > 0
                         ? 'Delete milestone row ' + row.milestoneRow!.name + ' and its ' + rowMilestones.length + ' milestone' + (rowMilestones.length === 1 ? '' : 's') + '? This cannot be undone.'
@@ -1020,8 +1023,8 @@ export default function GanttChart() {
                       rowMilestones.forEach(m => dispatch({ type: 'DELETE_ITEM', itemId: m.id }));
                       dispatch({ type: 'DELETE_MILESTONE_ROW', milestoneRowId: row.milestoneRow!.id });
                     } : undefined}
-                    onRename={row.milestoneRow ? name => dispatch({ type: 'UPDATE_MILESTONE_ROW', milestoneRowId: row.milestoneRow!.id, patch: { name } }) : undefined}
-                    onGripMouseDown={row.milestoneRow ? e => startRowDrag(e, { kind: 'milestonerow', id: row.milestoneRow!.id, projectId: row.project.id, subgroupId: row.subgroup?.id ?? null }) : undefined}
+                    onRename={!isViewOnly && row.milestoneRow ? name => dispatch({ type: 'UPDATE_MILESTONE_ROW', milestoneRowId: row.milestoneRow!.id, patch: { name } }) : undefined}
+                    onGripMouseDown={!isViewOnly && row.milestoneRow ? e => startRowDrag(e, { kind: 'milestonerow', id: row.milestoneRow!.id, projectId: row.project.id, subgroupId: row.subgroup?.id ?? null }) : undefined}
                   />
                   {showDropAfter && <DropIndicator color={row.project.color} />}
                 </React.Fragment>
@@ -1522,8 +1525,8 @@ export default function GanttChart() {
 // ─── Left Panel: Project Header ───────────────────────────────────────────────
 
 const LeftPanelHeader = React.forwardRef<HTMLDivElement, {
-  project: Project; rowH: number; onToggle: () => void; onDelete: () => void;
-  onGripMouseDown: (e: React.MouseEvent) => void; isDragOver: boolean;
+  project: Project; rowH: number; onToggle: () => void; onDelete?: () => void;
+  onGripMouseDown?: (e: React.MouseEvent) => void; isDragOver: boolean;
 }>(({ project, rowH, onToggle, onDelete, onGripMouseDown, isDragOver }, ref) => {
   const [showDelete, setShowDelete] = useState(false);
   return (
@@ -1539,7 +1542,7 @@ const LeftPanelHeader = React.forwardRef<HTMLDivElement, {
       onMouseEnter={() => setShowDelete(true)}
       onMouseLeave={() => setShowDelete(false)}
     >
-      <GripHandle onMouseDown={onGripMouseDown} />
+      {onGripMouseDown && <GripHandle onMouseDown={onGripMouseDown} />}
       <span
         style={{ fontSize: 9, color: project.color, transform: project.collapsed ? 'rotate(-90deg)' : 'rotate(0deg)', transition: 'transform 0.15s', display: 'inline-block', flexShrink: 0, cursor: 'pointer', marginRight: 5 }}
         onClick={onToggle}
@@ -1549,7 +1552,7 @@ const LeftPanelHeader = React.forwardRef<HTMLDivElement, {
         style={{ flex: 1, fontWeight: 700, fontSize: 12.5, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', letterSpacing: '-0.01em' }}
         onClick={onToggle}
       >{project.name}</span>
-      {showDelete && (
+      {showDelete && onDelete && (
         <button
           onClick={e => { e.stopPropagation(); onDelete(); }}
           style={{ width: 20, height: 20, borderRadius: 4, background: '#fee2e2', color: '#ef4444', fontSize: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
@@ -1564,8 +1567,8 @@ LeftPanelHeader.displayName = 'LeftPanelHeader';
 
 const LeftPanelTaskRow = React.forwardRef<HTMLDivElement, {
   row: CalendarRow & { kind: 'item' }; rowH: number;
-  isHovered: boolean; onHover: (id: string | null) => void; onDelete: () => void;
-  onGripMouseDown: (e: React.MouseEvent) => void;
+  isHovered: boolean; onHover: (id: string | null) => void; onDelete?: () => void;
+  onGripMouseDown?: (e: React.MouseEvent) => void;
 }>(({ row, rowH, isHovered, onHover, onDelete, onGripMouseDown }, ref) => {
   const { item, project } = row;
   const subgroupTint = row.subgroup ? project.color + '12' : undefined;
@@ -1583,13 +1586,13 @@ const LeftPanelTaskRow = React.forwardRef<HTMLDivElement, {
       onMouseEnter={() => onHover(item.id)}
       onMouseLeave={() => onHover(null)}
     >
-      <GripHandle onMouseDown={onGripMouseDown} />
+      {onGripMouseDown && <GripHandle onMouseDown={onGripMouseDown} />}
       <div style={{ width: row.subgroup ? 24 : 20, flexShrink: 0 }} />
       <div style={{ width: 10, height: 10, background: (item as any).color ?? project.color, borderRadius: '50%', flexShrink: 0, marginRight: 7, boxShadow: '0 1px 3px ' + ((item as any).color ?? project.color) + '55' }} />
       <span style={{ flex: 1, fontSize: row.subgroup ? 11.5 : 12, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
         {item.name}
       </span>
-      {isHovered && (
+      {isHovered && onDelete && (
         <button onClick={onDelete} style={{ width: 18, height: 18, borderRadius: 4, background: '#fee2e2', color: '#ef4444', fontSize: 11, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>×</button>
       )}
     </div>
@@ -2124,7 +2127,7 @@ const LeftPanelSubgroupHeader = React.forwardRef<HTMLDivElement, {
   rowH: number;
   isDragOver?: boolean;
   onToggle: () => void;
-  onDelete: () => void;
+  onDelete?: () => void;
 }>(({ subgroup, project, rowH, isDragOver, onToggle, onDelete }, ref) => {
   const [showDelete, setShowDelete] = useState(false);
 
@@ -2174,7 +2177,7 @@ const LeftPanelSubgroupHeader = React.forwardRef<HTMLDivElement, {
         {subgroup.name}
       </span>
 
-      {showDelete && (
+      {showDelete && onDelete && (
         <button
           onClick={e => { e.stopPropagation(); onDelete(); }}
           title="Delete subgroup (items move to top-level)"
@@ -2243,9 +2246,9 @@ const LeftPanelTaskRowGroup = React.forwardRef<HTMLDivElement, {
   rowH: number;
   isHovered: boolean;
   onHover: (key: string | null) => void;
-  onDeleteTask: (id: string) => void;
-  onDeleteRow: () => void;
-  onGripMouseDown: (e: React.MouseEvent) => void;
+  onDeleteTask?: (id: string) => void;
+  onDeleteRow?: () => void;
+  onGripMouseDown?: (e: React.MouseEvent) => void;
   onUpdateColor: (color: string | null) => void;
   onRename: (name: string) => void;
 }>(({ row, rowH, isHovered, onHover, onDeleteTask, onDeleteRow, onGripMouseDown, onUpdateColor, onRename }, ref) => {
@@ -2266,7 +2269,7 @@ const LeftPanelTaskRowGroup = React.forwardRef<HTMLDivElement, {
       onMouseLeave={() => onHover(null)}
     >
       {/* Grip handle */}
-      <GripHandle onMouseDown={onGripMouseDown} />
+      {onGripMouseDown && <GripHandle onMouseDown={onGripMouseDown} />}
       <div style={{ width: row.subgroup ? 24 : 20, flexShrink: 0 }} />{/* indent */}
 
       {/* Color dot — click to pick row color */}
@@ -2300,7 +2303,7 @@ const LeftPanelTaskRowGroup = React.forwardRef<HTMLDivElement, {
       </span>
 
       {/* Delete row */}
-      {isHovered && (
+      {isHovered && onDeleteRow && (
         <button onClick={() => { if (window.confirm('Delete task row? Tasks move to independent rows.')) onDeleteRow(); }}
           style={{ width: 16, height: 16, borderRadius: 3, background: '#fee2e2', color: '#ef4444', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>×</button>
       )}
@@ -2318,8 +2321,8 @@ const LeftPanelTaskRowGroup = React.forwardRef<HTMLDivElement, {
             <div key={t.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 12px' }}>
               <div style={{ width: 10, height: 4, background: t.color ?? project.color, borderRadius: 2, flexShrink: 0 }} />
               <span style={{ fontSize: 11, flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: 'var(--text-primary)' }}>{t.name}</span>
-              <button onClick={() => onDeleteTask(t.id)}
-                style={{ width: 14, height: 14, borderRadius: 3, background: '#fee2e2', color: '#ef4444', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>×</button>
+              {onDeleteTask && <button onClick={() => onDeleteTask(t.id)}
+                style={{ width: 14, height: 14, borderRadius: 3, background: '#fee2e2', color: '#ef4444', fontSize: 10, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>×</button>}
             </div>
           ))}
         </div>
