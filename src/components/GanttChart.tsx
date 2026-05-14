@@ -709,6 +709,12 @@ export default function GanttChart() {
   );
 
   const totalCalWidth = numCols * colWidth;
+
+  // In monthly view, column headers start at the 1st of calStartDate's month (columns[0]),
+  // not at calStartDate itself (which is a Monday, offset into the month).
+  // All position calculations must use the same origin as the column headers.
+  const calRefDate = viewMode === 'monthly' ? columns[0] : calStartDate;
+
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
 
   // ── Detail panel ──────────────────────────────────────────────────────────────
@@ -835,7 +841,7 @@ export default function GanttChart() {
   const handleTaskRowClick = useCallback((e: React.MouseEvent<HTMLDivElement>, task: GanttTask, rowEl: HTMLDivElement) => {
     if (calDragStateRef.current || calDragPreviewRef.current) return;
     const dayOffset   = Math.floor((e.clientX - rowEl.getBoundingClientRect().left) / ppd);
-    const clickedDate = formatDate(addDays(calStartDate, dayOffset));
+    const clickedDate = formatDate(addDays(calRefDate, dayOffset));
     if (isVacationDate(clickedDate)) return; // blocked by vacation
     if (!task.startDate) {
       dispatch({ type: 'UPDATE_ITEM', itemId: task.id, patch: { startDate: clickedDate, endDate: null } });
@@ -843,19 +849,19 @@ export default function GanttChart() {
       if (clickedDate >= task.startDate) dispatch({ type: 'UPDATE_ITEM', itemId: task.id, patch: { endDate: clickedDate } });
       else dispatch({ type: 'UPDATE_ITEM', itemId: task.id, patch: { startDate: clickedDate, endDate: null } });
     }
-  }, [calStartDate, ppd, dispatch]);
+  }, [calRefDate, ppd, dispatch]);
 
   const handleMilestonesRowClick = useCallback((e: React.MouseEvent<HTMLDivElement>, milestones: GanttMilestone[], rowEl: HTMLDivElement) => {
     if (calDragStateRef.current || calDragPreviewRef.current) return;
     const firstUnplaced = milestones.find(m => m.date === null);
     if (!firstUnplaced) return;
     const dayOffset   = Math.floor((e.clientX - rowEl.getBoundingClientRect().left) / ppd);
-    const clickedDate = formatDate(addDays(calStartDate, dayOffset));
+    const clickedDate = formatDate(addDays(calRefDate, dayOffset));
     if (isVacationDate(clickedDate)) return; // blocked by vacation
     dispatch({ type: 'UPDATE_ITEM', itemId: firstUnplaced.id, patch: { date: clickedDate } });
-  }, [calStartDate, ppd, dispatch]);
+  }, [calRefDate, ppd, dispatch]);
 
-  const todayOffset  = dayDiff(calStartDate, new Date()) * ppd;
+  const todayOffset  = dayDiff(calRefDate, new Date()) * ppd;
   const todayVisible = todayOffset >= 0 && todayOffset <= totalCalWidth;
   const calDragPreview = calDragPreviewRef.current;
   void calDragTick;
@@ -1033,7 +1039,7 @@ export default function GanttChart() {
               setQuickAdd(null); // close any open quick-add form
               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
               const dayOffset = Math.floor((e.clientX - rect.left) / ppd);
-              const date = formatDate(addDays(calStartDate, dayOffset));
+              const date = formatDate(addDays(calRefDate, dayOffset));
               const ctx = getRowContextFromY(e.clientY);
               setVacMenu({ x: e.clientX, y: e.clientY, date, ...ctx });
             }}
@@ -1049,7 +1055,7 @@ export default function GanttChart() {
             setQuickAdd(null); // close any open quick-add form
             const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
             const dayOffset = Math.floor((e.clientX - rect.left) / ppd);
-            const date = formatDate(addDays(calStartDate, dayOffset));
+            const date = formatDate(addDays(calRefDate, dayOffset));
             const ctx = getRowContextFromY(e.clientY);
             setVacMenu({ x: e.clientX, y: e.clientY, date, ...ctx });
           }}
@@ -1060,8 +1066,8 @@ export default function GanttChart() {
 
             {/* ── Vacation overlays ── */}
             {vacations.map(v => {
-              const left  = dayDiff(calStartDate, parseDate(v.startDate)) * ppd;
-              const right = dayDiff(calStartDate, parseDate(v.endDate))   * ppd + ppd;
+              const left  = dayDiff(calRefDate, parseDate(v.startDate)) * ppd;
+              const right = dayDiff(calRefDate, parseDate(v.endDate))   * ppd + ppd;
               const width = right - left;
               if (width <= 0) return null;
               return (
@@ -1100,7 +1106,7 @@ export default function GanttChart() {
                   <CalendarTaskRow
                     key={task.id} task={task} project={row.project}
                     rowH={ROW_H} totalWidth={totalCalWidth}
-                    calStartDate={calStartDate} ppd={ppd}
+                    calStartDate={calRefDate} ppd={ppd}
                     columns={columns} colWidth={colWidth}
                     isHovered={hoveredKey === task.id}
                     isHalf={!!task.startDate && !task.endDate}
@@ -1124,7 +1130,7 @@ export default function GanttChart() {
                     project={row.project}
                     rowH={ROW_H}
                     totalWidth={totalCalWidth}
-                    calStartDate={calStartDate}
+                    calStartDate={calRefDate}
                     ppd={ppd}
                     columns={columns}
                     colWidth={colWidth}
@@ -1159,7 +1165,7 @@ export default function GanttChart() {
                   key={`ms-${row.project.id}-${row.subgroup?.id ?? 'top'}-${row.milestoneRow?.id ?? 'default'}`}
                   milestones={row.milestones} project={row.project}
                   rowH={MILESTONE_ROW_H} totalWidth={totalCalWidth}
-                  calStartDate={calStartDate} ppd={ppd}
+                  calStartDate={calRefDate} ppd={ppd}
                   columns={columns} colWidth={colWidth}
                   isHovered={hoveredKey === `ms-${row.project.id}-${row.subgroup?.id ?? 'top'}-${row.milestoneRow?.id ?? 'default'}`}
                   subgroupTint={row.subgroup ? row.project.color + '12' : undefined}
