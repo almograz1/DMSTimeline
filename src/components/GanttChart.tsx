@@ -1038,6 +1038,7 @@ export default function GanttChart() {
           <div
             onContextMenu={e => {
               e.preventDefault();
+              if (isViewOnly) return;
               contextMenuFromCalendar.current = true;
               setQuickAdd(null); // close any open quick-add form
               const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -1054,6 +1055,7 @@ export default function GanttChart() {
           style={{ position: 'relative', flex: 1 }}
           onContextMenu={e => {
             e.preventDefault();
+            if (isViewOnly) return;
             contextMenuFromCalendar.current = true;
             setQuickAdd(null); // close any open quick-add form
             const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -1076,8 +1078,8 @@ export default function GanttChart() {
               return (
                 <div
                   key={v.id}
-                  title={v.name + ': ' + v.startDate + ' to ' + v.endDate + ' (click to delete)'}
-                  onClick={() => { if (window.confirm('Delete vacation: ' + v.name)) dispatch({ type: 'DELETE_VACATION', vacationId: v.id }); }}
+                  title={v.name + ': ' + v.startDate + ' to ' + v.endDate + (!isViewOnly ? ' (click to delete)' : '')}
+                  onClick={isViewOnly ? undefined : () => { if (window.confirm('Delete vacation: ' + v.name)) dispatch({ type: 'DELETE_VACATION', vacationId: v.id }); }}
                   style={{
                     position: 'absolute', left, top: 0, bottom: 0, width,
                     background: 'repeating-linear-gradient(45deg, rgba(239,68,68,0.07) 0px, rgba(239,68,68,0.07) 8px, rgba(239,68,68,0.13) 8px, rgba(239,68,68,0.13) 16px)',
@@ -1115,10 +1117,11 @@ export default function GanttChart() {
                     isHalf={!!task.startDate && !task.endDate}
                     preview={preview}
                     subgroupTint={row.subgroup ? row.project.color + '12' : undefined}
+                    isViewOnly={isViewOnly}
                     onHover={setHoveredKey}
                     onRowClick={handleTaskRowClick}
                     onDragStart={(e, kind) => startCalDrag(e, kind, task)}
-                    onBarClick={e => openDetail(task, task.color ?? row.project.color, e)}
+                    onBarClick={isViewOnly ? undefined : e => openDetail(task, task.color ?? row.project.color, e)}
                     today={today}
                   />
                 );
@@ -1140,7 +1143,7 @@ export default function GanttChart() {
                     isHovered={hoveredKey === `tr-${row.taskRow.id}`}
                     subgroupTint={row.subgroup ? row.project.color + '12' : undefined}
                     onHover={setHoveredKey}
-                    onBarClick={(e, task) => openDetail(task, task.color ?? row.project.color, e)}
+                    onBarClick={isViewOnly ? undefined : (e, task) => openDetail(task, task.color ?? row.project.color, e)}
                     onRowClick={handleTaskRowClick}
                     onDragStart={(e, kind, task) => startCalDrag(e, kind, task)}
                     dragPreview={calDragPreview}
@@ -1173,9 +1176,10 @@ export default function GanttChart() {
                   isHovered={hoveredKey === `ms-${row.project.id}-${row.subgroup?.id ?? 'top'}-${row.milestoneRow?.id ?? 'default'}`}
                   subgroupTint={row.subgroup ? row.project.color + '12' : undefined}
                   onHover={id => setHoveredKey(id)}
+                  isViewOnly={isViewOnly}
                   onRowClick={handleMilestonesRowClick}
                   onMilestoneDragStart={(e, m) => startCalDrag(e, 'move-milestone', m)}
-                  onMilestoneLabelClick={(e, m) => openDetail(m, m.color ?? row.project.color, e)}
+                  onMilestoneLabelClick={isViewOnly ? undefined : (e, m) => openDetail(m, m.color ?? row.project.color, e)}
                   milestoneRow={row.milestoneRow}
                   dragPreview={calDragPreview}
                   today={today}
@@ -1771,15 +1775,15 @@ function CalendarSwimLaneRow({ totalWidth, rowH, columns, colWidth, project }: {
 
 // ─── Calendar: Task Row ───────────────────────────────────────────────────────
 
-function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, isHalf, preview, subgroupTint, onHover, onRowClick, onDragStart, onBarClick, today }: {
+function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, isHalf, preview, subgroupTint, isViewOnly, onHover, onRowClick, onDragStart, onBarClick, today }: {
   task: GanttTask; project: Project; rowH: number; totalWidth: number; calStartDate: Date; ppd: number;
   columns: Date[]; colWidth: number; isHovered: boolean; isHalf: boolean;
   preview?: { startDate: string | null; endDate: string | null };
-  subgroupTint?: string;
+  subgroupTint?: string; isViewOnly?: boolean;
   onHover: (id: string | null) => void;
   onRowClick: (e: React.MouseEvent<HTMLDivElement>, task: GanttTask, el: HTMLDivElement) => void;
   onDragStart: (e: React.MouseEvent, kind: 'move-task' | 'resize-left' | 'resize-right') => void;
-  onBarClick: (e: React.MouseEvent) => void;
+  onBarClick?: (e: React.MouseEvent) => void;
   today: string;
 }) {
   const rowRef     = useRef<HTMLDivElement>(null);
@@ -1787,7 +1791,7 @@ function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, c
   return (
     <div
       ref={rowRef}
-      style={{ height: rowH, width: totalWidth, position: 'relative', background: isHovered ? 'var(--bg-row-hover)' : (subgroupTint ?? 'var(--bg-surface)'), borderBottom: '1px solid var(--border)', cursor: isUnplaced ? 'crosshair' : 'default', transition: 'background 0.1s', display: 'flex' }}
+      style={{ height: rowH, width: totalWidth, position: 'relative', background: isHovered ? 'var(--bg-row-hover)' : (subgroupTint ?? 'var(--bg-surface)'), borderBottom: '1px solid var(--border)', cursor: isUnplaced && !isViewOnly ? 'crosshair' : 'default', transition: 'background 0.1s', display: 'flex' }}
       onMouseEnter={() => onHover(task.id)}
       onMouseLeave={() => onHover(null)}
       onClick={e => { if (rowRef.current) onRowClick(e, task, rowRef.current); }}
@@ -1795,7 +1799,7 @@ function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, c
       {columns.map((col, i) => (
         <div key={i} style={{ width: colWidth, height: '100%', flexShrink: 0, borderRight: '1px solid var(--border)', background: formatDate(col) === today ? 'var(--accent-light)' : (isWeekend(col) && colWidth < 50 ? '#f9fafb' : 'transparent') }} />
       ))}
-      {isUnplaced && isHovered && (
+      {isUnplaced && isHovered && !isViewOnly && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', paddingLeft: 12, pointerEvents: 'none', zIndex: 2 }}>
           <span style={{ fontSize: 11, color: project.color, fontStyle: 'italic', background: project.color + '12', padding: '2px 8px', borderRadius: 4, border: `1px dashed ${project.color}60` }}>
             {isHalf ? '→ Click to set end date' : '→ Click to set start date'}
@@ -1811,12 +1815,12 @@ function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, c
 
 // ─── Calendar: Milestones Row ─────────────────────────────────────────────────
 
-function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, subgroupTint, onHover, onRowClick, onMilestoneDragStart, onMilestoneLabelClick, milestoneRow, dragPreview, today }: {
+function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, subgroupTint, isViewOnly, onHover, onRowClick, onMilestoneDragStart, onMilestoneLabelClick, milestoneRow, dragPreview, today }: {
   milestones: GanttMilestone[]; project: Project; rowH: number; totalWidth: number; calStartDate: Date; ppd: number;
-  columns: Date[]; colWidth: number; isHovered: boolean; subgroupTint?: string; onHover: (key: string | null) => void;
+  columns: Date[]; colWidth: number; isHovered: boolean; subgroupTint?: string; isViewOnly?: boolean; onHover: (key: string | null) => void;
   onRowClick: (e: React.MouseEvent<HTMLDivElement>, milestones: GanttMilestone[], el: HTMLDivElement) => void;
   onMilestoneDragStart: (e: React.MouseEvent, milestone: GanttMilestone) => void;
-  onMilestoneLabelClick: (e: React.MouseEvent, milestone: GanttMilestone) => void;
+  onMilestoneLabelClick?: (e: React.MouseEvent, milestone: GanttMilestone) => void;
   milestoneRow?: MilestoneRow;
   dragPreview: CalDragPreview | null; today: string;
 }) {
@@ -1827,7 +1831,7 @@ function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStart
   return (
     <div
       ref={rowRef}
-      style={{ height: rowH, width: totalWidth, position: 'relative', background: isHovered ? 'var(--bg-row-hover)' : (subgroupTint ?? 'var(--bg-surface)'), borderBottom: '1px solid var(--border)', cursor: hasUnplaced ? 'crosshair' : 'default', transition: 'background 0.1s', display: 'flex' }}
+      style={{ height: rowH, width: totalWidth, position: 'relative', background: isHovered ? 'var(--bg-row-hover)' : (subgroupTint ?? 'var(--bg-surface)'), borderBottom: '1px solid var(--border)', cursor: hasUnplaced && !isViewOnly ? 'crosshair' : 'default', transition: 'background 0.1s', display: 'flex' }}
       onMouseEnter={() => onHover(hoverKey)}
       onMouseLeave={() => onHover(null)}
       onClick={e => { if (rowRef.current) onRowClick(e, milestones, rowRef.current); }}
@@ -1835,7 +1839,7 @@ function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStart
       {columns.map((col, i) => (
         <div key={i} style={{ width: colWidth, height: '100%', flexShrink: 0, borderRight: '1px solid var(--border)', background: formatDate(col) === today ? 'var(--accent-light)' : (isWeekend(col) && colWidth < 50 ? '#f9fafb' : 'transparent') }} />
       ))}
-      {hasUnplaced && isHovered && (
+      {hasUnplaced && isHovered && !isViewOnly && (
         <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', paddingLeft: 12, pointerEvents: 'none', zIndex: 2 }}>
           <span style={{ fontSize: 11, color: project.color, fontStyle: 'italic', background: project.color + '12', padding: '2px 8px', borderRadius: 4, border: `1px dashed ${project.color}60` }}>
             🔷 Click to place "{firstUnplaced?.name}"
@@ -1848,7 +1852,7 @@ function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStart
             key={m.id} milestone={m} color={m.color ?? project.color} calStart={calStartDate} ppd={ppd}
             previewDate={dragPreview?.itemId === m.id ? dragPreview.date : undefined}
             onDragStart={e => onMilestoneDragStart(e, m)}
-            onLabelClick={e => onMilestoneLabelClick(e, m)}
+            onLabelClick={onMilestoneLabelClick ? e => onMilestoneLabelClick(e, m) : undefined}
             icon={milestoneRow?.icon}
           />
         ))}
@@ -2340,7 +2344,7 @@ function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calSt
   rowH: number; totalWidth: number; calStartDate: Date; ppd: number;
   columns: Date[]; colWidth: number; isHovered: boolean;
   onHover: (key: string | null) => void;
-  onBarClick: (e: React.MouseEvent, task: GanttTask) => void;
+  onBarClick?: (e: React.MouseEvent, task: GanttTask) => void;
   onRowClick: (e: React.MouseEvent<HTMLDivElement>, task: GanttTask, el: HTMLDivElement) => void;
   onDragStart: (e: React.MouseEvent, kind: 'move-task' | 'resize-left' | 'resize-right', task: GanttTask) => void;
   dragPreview: CalDragPreview | null;
