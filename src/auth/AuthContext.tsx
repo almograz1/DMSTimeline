@@ -44,8 +44,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Must resolve before we stop showing the loading screen, so the user
     // doesn't see a login-page flash after returning from a Google redirect.
     getRedirectResult(auth)
-      .then(result => { if (result) return writeUserProfile(result.user); })
-      .catch(err => console.error('getRedirectResult:', err))
+      .then(result => {
+        console.log('[Auth] getRedirectResult →', result ? `user: ${result.user.uid}` : 'null');
+        if (result) return writeUserProfile(result.user);
+      })
+      .catch(err => console.error('[Auth] getRedirectResult error:', err?.code, err?.message))
       .finally(() => setLoading(false));
 
     const unsub = onAuthStateChanged(auth, u => setUser(u));
