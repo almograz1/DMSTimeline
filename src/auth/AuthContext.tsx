@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
-  onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword,
-  signOut, updateProfile, linkWithPopup,
+  onAuthStateChanged, signInWithRedirect, getRedirectResult,
+  signInWithEmailAndPassword, signOut, updateProfile, linkWithRedirect,
   type User,
 } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
@@ -41,17 +41,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, u => {
-      setUser(u);
-      setLoading(false);
-    });
+    // Must resolve before we stop showing the loading screen, so the user
+    // doesn't see a login-page flash after returning from a Google redirect.
+    getRedirectResult(auth)
+      .then(result => { if (result) return writeUserProfile(result.user); })
+      .catch(err => console.error('getRedirectResult:', err))
+      .finally(() => setLoading(false));
+
+    const unsub = onAuthStateChanged(auth, u => setUser(u));
     return unsub;
   }, []);
 
   const signInWithGoogle = async () => {
-    const result = await signInWithPopup(auth, googleProvider);
-    await writeUserProfile(result.user);
-    setUser(snapshotUser(result.user));
+    await signInWithRedirect(auth, googleProvider);
   };
 
   const signInWithEmail = async (email: string, password: string) => {
@@ -61,9 +63,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const linkWithGoogle = async () => {
     if (!auth.currentUser) throw new Error('Not logged in');
-    const result = await linkWithPopup(auth.currentUser, googleProvider);
-    await writeUserProfile(result.user);
-    setUser(snapshotUser(result.user));
+    await linkWithRedirect(auth.currentUser, googleProvider);
   };
 
   const updateDisplayName = async (name: string) => {

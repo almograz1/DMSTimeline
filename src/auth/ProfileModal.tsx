@@ -34,22 +34,13 @@ export default function ProfileModal({ onClose }: Props) {
 
   async function handleLinkGoogle() {
     setLinking(true);
-    setMsg(null);
+    setMsg({ text: 'Redirecting to Google…', ok: true });
     try {
       await linkWithGoogle();
-      setMsg({ text: 'Google account linked! You can now sign in with Google.', ok: true });
+      // Page navigates to Google — nothing runs after this
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : '';
-      if (errMsg.includes('credential-already-in-use')) {
-        setMsg({ text: 'That Google account is already linked to a different user.', ok: false });
-      } else if (errMsg.includes('popup-blocked')) {
-        setMsg({ text: 'Your browser blocked the popup. Please allow popups for this site and try again.', ok: false });
-      } else if (errMsg.includes('popup-closed-by-user') || errMsg.includes('cancelled-popup-request')) {
-        setMsg(null);
-      } else {
-        setMsg({ text: 'Failed to link Google account. Try again.', ok: false });
-      }
-    } finally {
+      setMsg({ text: errMsg || 'Failed to link Google account. Try again.', ok: false });
       setLinking(false);
     }
   }

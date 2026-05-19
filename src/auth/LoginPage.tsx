@@ -36,16 +36,10 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await signInWithGoogle();
+      // Page navigates to Google — nothing runs after this
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '';
-      if (msg.includes('popup-blocked')) {
-        setError('Your browser blocked the sign-in popup. Please allow popups for this site and try again.');
-      } else if (msg.includes('popup-closed-by-user') || msg.includes('cancelled-popup-request')) {
-        setError('');
-      } else {
-        setError('Google sign-in failed. Try again.');
-      }
-    } finally {
+      setError(msg || 'Google sign-in failed. Try again.');
       setLoading(false);
     }
   }
