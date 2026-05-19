@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
-  onAuthStateChanged, signInWithRedirect, getRedirectResult,
-  signInWithEmailAndPassword, signOut, updateProfile, linkWithRedirect,
+  onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword,
+  signOut, updateProfile, linkWithPopup,
   type User,
 } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
@@ -19,7 +19,7 @@ async function writeUserProfile(user: User) {
   }, { merge: true });
 }
 
-// Create a fresh object from a Firebase User so React detects the state change
+// Create a new object reference from a Firebase User to trigger React re-renders
 function snapshotUser(u: User): User {
   return Object.assign(Object.create(Object.getPrototypeOf(u)), u) as User;
 }
@@ -41,22 +41,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Must resolve before we stop showing the loading screen, so the user
-    // doesn't see a login-page flash after returning from a Google redirect.
-    getRedirectResult(auth)
-      .then(result => {
-        console.log('[Auth] getRedirectResult →', result ? `user: ${result.user.uid}` : 'null');
-        if (result) return writeUserProfile(result.user);
-      })
-      .catch(err => console.error('[Auth] getRedirectResult error:', err?.code, err?.message))
-      .finally(() => setLoading(false));
-
-    const unsub = onAuthStateChanged(auth, u => setUser(u));
+    const unsub = onAuthStateChanged(auth, u => {
+      setUser(u);
+      setLoading(false);
+    });
     return unsub;
   }, []);
 
   const signInWithGoogle = async () => {
-    await signInWithRedirect(auth, googleProvider);
+    const result = await signInWithPopup(auth, googleProvider);
+    await writeUserProfile(result.user);
+    setUser(snapshotUser(result.user));
   };
 
   const signInWithEmail = async (email: string, password: string) => {
@@ -66,7 +61,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const linkWithGoogle = async () => {
     if (!auth.currentUser) throw new Error('Not logged in');
-    await linkWithRedirect(auth.currentUser, googleProvider);
+    const result = await linkWithPopup(auth.currentUser, googleProvider);
+    await writeUserProfile(result.user);
+    setUser(snapshotUser(result.user));
   };
 
   const updateDisplayName = async (name: string) => {

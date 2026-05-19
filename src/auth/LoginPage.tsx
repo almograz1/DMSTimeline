@@ -36,10 +36,14 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await signInWithGoogle();
-      // Page navigates to Google — nothing runs after this
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : '';
-      setError(msg || 'Google sign-in failed. Try again.');
+      if (msg.includes('popup-closed-by-user') || msg.includes('cancelled-popup-request')) {
+        setError('');
+      } else {
+        setError('Google sign-in failed. Try again.');
+      }
+    } finally {
       setLoading(false);
     }
   }
@@ -112,7 +116,7 @@ export default function LoginPage() {
           <div style={{ flex: 1, height: 1, background: 'var(--border)' }} />
         </div>
 
-        {/* Email/password login (existing users only) */}
+        {/* Email/password login */}
         <form onSubmit={handleEmailSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
           <div>
             <label style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-secondary)', display: 'block', marginBottom: 6 }}>
