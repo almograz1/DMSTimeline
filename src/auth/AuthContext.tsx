@@ -1,7 +1,7 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import {
-  onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword,
-  signOut, updateProfile, linkWithPopup,
+  onAuthStateChanged, signInWithRedirect, getRedirectResult,
+  signInWithEmailAndPassword, signOut, updateProfile, linkWithRedirect,
   type User,
 } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
@@ -19,7 +19,6 @@ async function writeUserProfile(user: User) {
   }, { merge: true });
 }
 
-// Create a new object reference from a Firebase User to trigger React re-renders
 function snapshotUser(u: User): User {
   return Object.assign(Object.create(Object.getPrototypeOf(u)), u) as User;
 }
@@ -39,8 +38,24 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser]       = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const redirectHandled       = useRef(false);
 
   useEffect(() => {
+    // Check for redirect result first (runs once on mount)
+    if (!redirectHandled.current) {
+      redirectHandled.current = true;
+      getRedirectResult(auth).then(async result => {
+        if (result?.user) {
+          await writeUserProfile(result.user);
+          setUser(snapshotUser(result.user));
+        }
+      }).catch(err => {
+        console.error('[Auth] getRedirectResult error:', err);
+      }).finally(() => {
+        // onAuthStateChanged will set loading=false; this is belt-and-suspenders
+      });
+    }
+
     const unsub = onAuthStateChanged(auth, u => {
       setUser(u);
       setLoading(false);
@@ -49,9 +64,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signInWithGoogle = async () => {
-    const result = await signInWithPopup(auth, googleProvider);
-    await writeUserProfile(result.user);
-    setUser(snapshotUser(result.user));
+    await signInWithRedirect(auth, googleProvider);
+    // Page navigates away — no code runs after this
   };
 
   const signInWithEmail = async (email: string, password: string) => {
@@ -61,9 +75,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const linkWithGoogle = async () => {
     if (!auth.currentUser) throw new Error('Not logged in');
-    const result = await linkWithPopup(auth.currentUser, googleProvider);
-    await writeUserProfile(result.user);
-    setUser(snapshotUser(result.user));
+    await signInWithRedirect(auth, googleProvider);
+    // Page navigates away; result is processed in getRedirectResult on return
   };
 
   const updateDisplayName = async (name: string) => {

@@ -36,14 +36,10 @@ export default function LoginPage() {
     setLoading(true);
     try {
       await signInWithGoogle();
+      // Page navigates away; no code runs after this
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : '';
-      if (msg.includes('popup-closed-by-user') || msg.includes('cancelled-popup-request')) {
-        setError('');
-      } else {
-        setError('Google sign-in failed. Try again.');
-      }
-    } finally {
+      const msg = err instanceof Error ? err.message : String(err);
+      setError(msg);
       setLoading(false);
     }
   }

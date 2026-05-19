@@ -37,17 +37,14 @@ export default function ProfileModal({ onClose }: Props) {
     setMsg(null);
     try {
       await linkWithGoogle();
-      setMsg({ text: 'Google account linked! You can now sign in with Google.', ok: true });
+      // Page navigates away for the redirect flow; code below won't run
     } catch (err: unknown) {
       const errMsg = err instanceof Error ? err.message : '';
       if (errMsg.includes('credential-already-in-use')) {
         setMsg({ text: 'That Google account is already linked to a different user.', ok: false });
-      } else if (errMsg.includes('popup-closed-by-user') || errMsg.includes('cancelled-popup-request')) {
-        setMsg(null);
       } else {
         setMsg({ text: 'Failed to link Google account. Try again.', ok: false });
       }
-    } finally {
       setLinking(false);
     }
   }
@@ -132,7 +129,7 @@ export default function ProfileModal({ onClose }: Props) {
                 <path fill="#FBBC05" d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957C.347 6.175 0 7.55 0 9s.348 2.825.957 4.039l3.007-2.332z"/>
                 <path fill="#EA4335" d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z"/>
               </svg>
-              {linking ? 'Linking…' : 'Link Google Account'}
+              {linking ? 'Redirecting…' : 'Link Google Account'}
             </button>
           </div>
         )}
