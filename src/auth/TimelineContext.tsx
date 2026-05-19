@@ -120,10 +120,11 @@ export function TimelineProvider({ children }: { children: React.ReactNode }) {
     await setDoc(doc(db, TIMELINES_COL, id), timeline);
     // Also add owner as a member so queries work uniformly
     await setDoc(doc(db, MEMBERS_COL, `${id}_${user.uid}`), {
-      timelineId: id,
-      userId:     user.uid,
-      email:      user.email ?? '',
-      role:       'owner',
+      timelineId:  id,
+      userId:      user.uid,
+      email:       user.email ?? '',
+      displayName: user.displayName ?? '',
+      role:        'owner',
     });
     setActiveTimelineId(id);
     return id;

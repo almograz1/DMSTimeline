@@ -10,6 +10,7 @@ import AddMilestoneRowModal from './components/AddMilestoneRowModal';
 import AddTaskRowModal from './components/AddTaskRowModal';
 import LoginPage from './auth/LoginPage';
 import ShareModal from './auth/ShareModal';
+import ProfileModal from './auth/ProfileModal';
 import './index.css';
 
 // ─── Timeline Selector + Create ───────────────────────────────────────────────
@@ -111,7 +112,8 @@ function TimelineSelector() {
 
 function UserMenu() {
   const { user, logout } = useAuth();
-  const [open, setOpen]  = useState(false);
+  const [open, setOpen]           = useState(false);
+  const [showProfile, setProfile] = useState(false);
 
   if (!user) return null;
 
@@ -119,6 +121,7 @@ function UserMenu() {
   const initials    = displayName.slice(0, 2).toUpperCase();
 
   return (
+    <>
     <div style={{ position: 'relative' }}>
       <button
         onClick={() => setOpen(o => !o)}
@@ -138,7 +141,6 @@ function UserMenu() {
 
       {open && (
         <>
-          {/* Backdrop */}
           <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setOpen(false)} />
           <div style={{
             position: 'absolute', right: 0, top: 38, zIndex: 100,
@@ -149,6 +151,12 @@ function UserMenu() {
             <p style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 2 }}>{displayName}</p>
             <p style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 12 }}>{user.email}</p>
             <button
+              onClick={() => { setOpen(false); setProfile(true); }}
+              style={{ width: '100%', padding: '8px 0', borderRadius: 7, background: 'var(--bg-app)', color: 'var(--text-primary)', fontSize: 12, fontWeight: 600, marginBottom: 6 }}
+            >
+              Edit Profile
+            </button>
+            <button
               onClick={() => { logout(); setOpen(false); }}
               style={{ width: '100%', padding: '8px 0', borderRadius: 7, background: '#fee2e2', color: '#ef4444', fontSize: 12, fontWeight: 600 }}
             >
@@ -158,6 +166,8 @@ function UserMenu() {
         </>
       )}
     </div>
+    {showProfile && <ProfileModal onClose={() => setProfile(false)} />}
+    </>
   );
 }
 

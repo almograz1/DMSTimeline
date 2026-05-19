@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
   onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword,
-  createUserWithEmailAndPassword, signOut,
+  signOut, updateProfile, linkWithPopup,
   type User,
 } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
@@ -9,12 +9,19 @@ import { getFirestore, doc, setDoc } from 'firebase/firestore';
 
 const db = getFirestore();
 
-async function writeUserProfile(user: import('firebase/auth').User) {
+async function writeUserProfile(user: User) {
+  const displayName = user.displayName ?? '';
   await setDoc(doc(db, 'userProfiles', user.uid), {
     uid: user.uid,
     email: user.email?.toLowerCase() ?? '',
-    displayName: user.displayName ?? '',
+    displayName,
+    displayNameLower: displayName.toLowerCase(),
   }, { merge: true });
+}
+
+// Create a fresh object from a Firebase User so React detects the state change
+function snapshotUser(u: User): User {
+  return Object.assign(Object.create(Object.getPrototypeOf(u)), u) as User;
 }
 
 interface AuthContextValue {
@@ -22,7 +29,8 @@ interface AuthContextValue {
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
   signInWithEmail: (email: string, password: string) => Promise<void>;
-  createAccount: (email: string, password: string) => Promise<void>;
+  linkWithGoogle: () => Promise<void>;
+  updateDisplayName: (name: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -43,6 +51,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const signInWithGoogle = async () => {
     const result = await signInWithPopup(auth, googleProvider);
     await writeUserProfile(result.user);
+    setUser(snapshotUser(result.user));
   };
 
   const signInWithEmail = async (email: string, password: string) => {
@@ -50,9 +59,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await writeUserProfile(result.user);
   };
 
-  const createAccount = async (email: string, password: string) => {
-    const result = await createUserWithEmailAndPassword(auth, email, password);
+  const linkWithGoogle = async () => {
+    if (!auth.currentUser) throw new Error('Not logged in');
+    const result = await linkWithPopup(auth.currentUser, googleProvider);
     await writeUserProfile(result.user);
+    setUser(snapshotUser(result.user));
+  };
+
+  const updateDisplayName = async (name: string) => {
+    if (!auth.currentUser) throw new Error('Not logged in');
+    await updateProfile(auth.currentUser, { displayName: name });
+    await writeUserProfile(auth.currentUser);
+    setUser(snapshotUser(auth.currentUser));
   };
 
   const logout = async () => {
@@ -60,7 +78,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, signInWithGoogle, signInWithEmail, createAccount, logout }}>
+    <AuthContext.Provider value={{ user, loading, signInWithGoogle, signInWithEmail, linkWithGoogle, updateDisplayName, logout }}>
       {children}
     </AuthContext.Provider>
   );
