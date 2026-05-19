@@ -4,7 +4,13 @@ import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 
 const firebaseConfig = {
   apiKey:            import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  // In production, authDomain must match the app's own domain so that
+  // signInWithRedirect / getRedirectResult work without cross-origin
+  // storage access (broken in Chrome 115+ without a same-origin proxy).
+  // vercel.json proxies /__/auth/* to firebaseapp.com for us.
+  authDomain:        import.meta.env.PROD
+    ? 'dms-timeline.vercel.app'
+    : import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
   projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID,
   storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
