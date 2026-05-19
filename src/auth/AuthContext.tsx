@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import {
-  onAuthStateChanged, signInWithRedirect, signInWithEmailAndPassword,
-  getRedirectResult, signOut, updateProfile, linkWithRedirect,
+  onAuthStateChanged, signInWithPopup, signInWithEmailAndPassword,
+  signOut, updateProfile, linkWithPopup,
   type User,
 } from 'firebase/auth';
 import { auth, googleProvider } from '../firebase';
@@ -41,11 +41,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Handle result from signInWithRedirect / linkWithRedirect
-    getRedirectResult(auth)
-      .then(result => { if (result) writeUserProfile(result.user); })
-      .catch(() => {});
-
     const unsub = onAuthStateChanged(auth, u => {
       setUser(u);
       setLoading(false);
@@ -54,8 +49,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signInWithGoogle = async () => {
-    await signInWithRedirect(auth, googleProvider);
-    // Page navigates to Google — result handled in getRedirectResult on return
+    const result = await signInWithPopup(auth, googleProvider);
+    await writeUserProfile(result.user);
+    setUser(snapshotUser(result.user));
   };
 
   const signInWithEmail = async (email: string, password: string) => {
@@ -65,8 +61,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const linkWithGoogle = async () => {
     if (!auth.currentUser) throw new Error('Not logged in');
-    await linkWithRedirect(auth.currentUser, googleProvider);
-    // Page navigates to Google — account linked on return, onAuthStateChanged updates user
+    const result = await linkWithPopup(auth.currentUser, googleProvider);
+    await writeUserProfile(result.user);
+    setUser(snapshotUser(result.user));
   };
 
   const updateDisplayName = async (name: string) => {
