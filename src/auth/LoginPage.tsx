@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from './AuthContext';
 
 export default function LoginPage() {
-  const { signInWithGoogle, signInWithEmail } = useAuth();
+  const { signInWithGoogle, signInWithEmail, authNotice } = useAuth();
 
   const [email, setEmail]       = useState('');
   const [password, setPassword] = useState('');
@@ -78,6 +78,13 @@ export default function LoginPage() {
             Sign in to your account
           </p>
         </div>
+
+        {/* Auth diagnostic notice (e.g. redirect sign-in blocked by the browser) */}
+        {authNotice && (
+          <p style={{ fontSize: 12, color: '#b45309', background: '#fffbeb', border: '1px solid #fcd34d', padding: '10px 12px', borderRadius: 8, margin: 0, lineHeight: 1.5 }}>
+            ⚠️ {authNotice}
+          </p>
+        )}
 
         {/* Google button */}
         <button

@@ -872,13 +872,39 @@ export default function GanttChart() {
   return (
     <>
     <div ref={ganttScrollRef} className='gantt-scroll' onContextMenu={e => e.preventDefault()} style={{ flex: 1, overflow: 'auto', display: 'flex', background: 'var(--bg-surface)' }}>
-      <div style={{ display: 'flex', minWidth: LEFT_W + totalCalWidth, minHeight: '100%' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', minWidth: LEFT_W + totalCalWidth, minHeight: '100%' }}>
+
+        {/* ── SHARED HEADER ROW ─────────────────────────────────────────────
+            The left-panel header and the calendar date header live in ONE flex
+            row so the body columns below always share a single vertical origin.
+            This keeps the left labels row-aligned with the calendar under any
+            browser zoom (no per-column header rounding to drift apart). */}
+        <div style={{ display: 'flex', position: 'sticky', top: 0, zIndex: 15, flexShrink: 0 }}>
+          <div style={{ width: LEFT_W, flexShrink: 0, position: 'sticky', left: 0, zIndex: 2, height: HEADER_H, display: 'flex', alignItems: 'center', paddingLeft: 16, borderBottom: '1.5px solid var(--border-strong)', borderRight: '1.5px solid var(--border-strong)', background: 'var(--bg-header)' }}>
+            <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Projects / Tasks</span>
+          </div>
+          <div
+            onContextMenu={e => {
+              e.preventDefault();
+              if (isViewOnly) return;
+              contextMenuFromCalendar.current = true;
+              setQuickAdd(null);
+              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+              const dayOffset = Math.floor((e.clientX - rect.left) / ppd);
+              const date = formatDate(addDays(calRefDate, dayOffset));
+              const ctx = getRowContextFromY(e.clientY);
+              setVacMenu({ x: e.clientX, y: e.clientY, date, ...ctx });
+            }}
+          >
+            <CalendarHeader columns={columns} viewMode={viewMode} colWidth={colWidth} todayDate={today} />
+          </div>
+        </div>
+
+        {/* ── BODY (left panel + calendar grid share one top origin) ── */}
+        <div style={{ display: 'flex', flex: 1 }}>
 
         {/* ── LEFT PANEL ───────────────────────────────────────────────────── */}
         <div style={{ position: 'sticky', left: 0, width: LEFT_W, flexShrink: 0, background: 'var(--bg-surface)', borderRight: '1.5px solid var(--border-strong)', zIndex: 10, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ height: HEADER_H, display: 'flex', alignItems: 'center', paddingLeft: 16, borderBottom: '1.5px solid var(--border-strong)', background: 'var(--bg-header)', position: 'sticky', top: 0, zIndex: 11 }}>
-            <span style={{ fontSize: 10.5, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em' }}>Projects / Tasks</span>
-          </div>
 
           {rows.map((row, rowIndex) => {
             if (row.kind === 'header') {
@@ -1034,25 +1060,8 @@ export default function GanttChart() {
         </div>
 
         {/* ── CALENDAR AREA ────────────────────────────────────────────────── */}
-        <div style={{ flex: 1, position: 'relative', display: 'flex', flexDirection: 'column' }}>
-          <div
-            onContextMenu={e => {
-              e.preventDefault();
-              if (isViewOnly) return;
-              contextMenuFromCalendar.current = true;
-              setQuickAdd(null); // close any open quick-add form
-              const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-              const dayOffset = Math.floor((e.clientX - rect.left) / ppd);
-              const date = formatDate(addDays(calRefDate, dayOffset));
-              const ctx = getRowContextFromY(e.clientY);
-              setVacMenu({ x: e.clientX, y: e.clientY, date, ...ctx });
-            }}
-          >
-            <CalendarHeader columns={columns} viewMode={viewMode} colWidth={colWidth} todayDate={today} />
-          </div>
-
-          <div
-          style={{ position: 'relative', flex: 1 }}
+        <div
+          style={{ flex: 1, position: 'relative' }}
           onContextMenu={e => {
             e.preventDefault();
             if (isViewOnly) return;

@@ -11,6 +11,7 @@ import AddTaskRowModal from './components/AddTaskRowModal';
 import LoginPage from './auth/LoginPage';
 import ShareModal from './auth/ShareModal';
 import ProfileModal from './auth/ProfileModal';
+import DisplayNameModal from './auth/DisplayNameModal';
 import './index.css';
 
 // ─── Timeline Selector + Create ───────────────────────────────────────────────
@@ -177,7 +178,7 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow,
   onAddProject: () => void; onAddSubgroup: () => void; onAddMilestoneRow: () => void; onAddTaskRow: () => void;
   onAddTask: () => void; onAddMilestone: () => void;
 }) {
-  const { state, dispatch } = useGantt();
+  const { state, dispatch, undo, canUndo } = useGantt();
   const { isViewOnly }      = useTimeline();
   const { viewMode }        = state;
   const hasProjects         = state.projects.length > 0;
@@ -223,6 +224,27 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow,
       )}
 
       <div style={{ flex: 1 }} />
+
+      {/* Undo */}
+      {!isViewOnly && (
+        <>
+          <button
+            onClick={undo}
+            disabled={!canUndo}
+            title="Undo (Ctrl+Z)"
+            style={{
+              minWidth: 28, height: 28, borderRadius: 6, padding: '0 7px',
+              background: 'rgba(255,255,255,0.07)', color: 'var(--toolbar-text)',
+              fontSize: 14, fontWeight: 600, border: '1px solid rgba(255,255,255,0.10)',
+              opacity: canUndo ? 1 : 0.35, cursor: canUndo ? 'pointer' : 'not-allowed',
+              transition: 'background 0.15s',
+            }}
+            onMouseEnter={e => { if (canUndo) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.13)'; }}
+            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.07)'; }}
+          >↶</button>
+          <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
+        </>
+      )}
 
       {/* Navigation */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
@@ -378,7 +400,7 @@ function AppInner() {
 // ─── Root with Auth Gate ──────────────────────────────────────────────────────
 
 function AuthGate() {
-  const { user, loading } = useAuth();
+  const { user, loading, needsDisplayName } = useAuth();
 
   if (loading) {
     return (
@@ -396,6 +418,7 @@ function AuthGate() {
       <GanttProvider>
         <AppInner />
       </GanttProvider>
+      {needsDisplayName && <DisplayNameModal />}
     </TimelineProvider>
   );
 }

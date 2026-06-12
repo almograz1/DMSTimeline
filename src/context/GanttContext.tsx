@@ -31,6 +31,25 @@ function reindex<T extends { order: number }>(items: T[]): T[] {
   return items.map((item, i) => ({ ...item, order: i * 1000 }));
 }
 
+/** Capture the persisted-data slices of state for the undo stack */
+function dataSnapshot(s: GanttState): DataSnapshot {
+  return {
+    projects:      s.projects,
+    subgroups:     s.subgroups,
+    items:         s.items,
+    vacations:     s.vacations,
+    milestoneRows: s.milestoneRows,
+    taskRows:      s.taskRows,
+  };
+}
+
+/** Firestore rejects `undefined` field values — drop them before writing */
+function stripUndefined<T extends object>(obj: T): T {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(obj)) if (v !== undefined) out[k] = v;
+  return out as T;
+}
+
 // ─── State ────────────────────────────────────────────────────────────────────
 
 interface GanttState {
@@ -78,7 +97,23 @@ type Action =
   | { type: 'DELETE_VACATION';         vacationId: string }
   | { type: 'SET_VIEW_MODE';           viewMode: ViewMode }
   | { type: 'PAN_CALENDAR';            days: number }
-  | { type: 'GO_TO_TODAY' };
+  | { type: 'GO_TO_TODAY' }
+  | { type: 'RESTORE_STATE';           data: DataSnapshot };
+
+/** The subset of state that undo restores (everything except view/pan settings) */
+interface DataSnapshot {
+  projects: Project[];
+  subgroups: Subgroup[];
+  items: GanttItem[];
+  vacations: VacationPeriod[];
+  milestoneRows: MilestoneRow[];
+  taskRows: TaskRow[];
+}
+
+/** Action types that don't change persisted data and so aren't part of undo history */
+const NON_HISTORY_ACTIONS = new Set<Action['type']>([
+  'SET_VIEW_MODE', 'PAN_CALENDAR', 'GO_TO_TODAY', 'RESTORE_STATE',
+]);
 
 // ─── Reducer ──────────────────────────────────────────────────────────────────
 
@@ -235,6 +270,8 @@ function reducer(state: GanttState, action: Action): GanttState {
       const { startDate } = defaultCalendarWindow();
       return { ...state, calendarStart: formatDate(startDate) };
     }
+    case 'RESTORE_STATE':
+      return { ...state, ...action.data };
     default: return state;
   }
 }
@@ -256,6 +293,9 @@ interface GanttContextValue {
   dispatch: React.Dispatch<Action>;
   genId: () => string;
   loading: boolean;
+  /** Revert the most recent change (Ctrl+Z). Confirms first if it would delete items. */
+  undo: () => void;
+  canUndo: boolean;
 }
 
 const GanttContext = createContext<GanttContextValue | null>(null);
@@ -268,6 +308,12 @@ export function GanttProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch]                 = useReducer(reducer, undefined, buildInitialState);
   const [loading, setLoading]             = useState(true);
 
+  // ── Undo history ────────────────────────────────────────────────────────────
+  // Stack of pre-mutation data snapshots. The reducer updates immutably, so each
+  // snapshot just holds references to the old arrays — no deep clone needed.
+  const undoStackRef          = useRef<DataSnapshot[]>([]);
+  const [canUndo, setCanUndo] = useState(false);
+
   const genId = useCallback(
     () => `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
     []
@@ -275,6 +321,10 @@ export function GanttProvider({ children }: { children: React.ReactNode }) {
 
   // ── Firestore → local: scoped to userId + timelineId ──────────────────────
   useEffect(() => {
+    // Undo history is per-timeline — never carry it across a timeline switch.
+    undoStackRef.current = [];
+    setCanUndo(false);
+
     if (!user || !activeTimeline) {
       dispatch({ type: 'LOAD_PROJECTS',  projects:  [] });
       dispatch({ type: 'LOAD_SUBGROUPS', subgroups: [] });
@@ -364,10 +414,17 @@ export function GanttProvider({ children }: { children: React.ReactNode }) {
       action = { ...action, milestoneRow: { ...(action as { milestoneRow: MilestoneRow }).milestoneRow, userId: uid, timelineId: tid, order: nextOrder(siblings) } };
     }
 
+    // Record a pre-mutation snapshot for undo (skip view/pan-only actions).
+    if (!NON_HISTORY_ACTIONS.has(action.type)) {
+      undoStackRef.current.push(dataSnapshot(state));
+      if (undoStackRef.current.length > 50) undoStackRef.current.shift();
+      setCanUndo(true);
+    }
+
     lastActionRef.current = action;
     dispatch(action);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, activeTimeline, state.projects, state.subgroups, state.items]);
+  }, [user, activeTimeline, state]);
 
   useEffect(() => {
     const action = lastActionRef.current;
@@ -377,8 +434,49 @@ export function GanttProvider({ children }: { children: React.ReactNode }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
 
+  // ── Undo (Ctrl+Z) ────────────────────────────────────────────────────────────
+  const undo = useCallback(() => {
+    const prev = undoStackRef.current.pop();
+    if (!prev) { setCanUndo(false); return; }
+    const current = dataSnapshot(state);
+
+    // If reverting would delete tasks/milestones that exist right now, confirm first.
+    const prevItemIds  = new Set(prev.items.map(i => i.id));
+    const removedItems = current.items.filter(i => !prevItemIds.has(i.id));
+    if (removedItems.length > 0) {
+      const names = removedItems.slice(0, 6).map(i => '• ' + (i.name?.trim() || 'Untitled')).join('\n');
+      const more  = removedItems.length > 6 ? `\n…and ${removedItems.length - 6} more` : '';
+      const ok = window.confirm(
+        `Undo will remove ${removedItems.length} item${removedItems.length === 1 ? '' : 's'}:\n\n${names}${more}\n\nContinue?`
+      );
+      if (!ok) { undoStackRef.current.push(prev); return; } // keep history intact
+    }
+
+    dispatch({ type: 'RESTORE_STATE', data: prev });
+    setCanUndo(undoStackRef.current.length > 0);
+    restoreSnapshotToFirestore(prev, current).catch(err => console.error('Undo sync:', err));
+  }, [state]);
+
+  // Keep a stable ref so the global key listener always calls the latest undo().
+  const undoRef = useRef(undo);
+  undoRef.current = undo;
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'z' || e.key === 'Z');
+      if (!isUndo) return;
+      // Don't hijack undo while the user is editing text in a field.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+      e.preventDefault();
+      undoRef.current();
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   return (
-    <GanttContext.Provider value={{ state, dispatch: dispatchWithSync, genId, loading }}>
+    <GanttContext.Provider value={{ state, dispatch: dispatchWithSync, genId, loading, undo, canUndo }}>
       {children}
     </GanttContext.Provider>
   );
@@ -521,6 +619,46 @@ async function syncToFirestore(action: Action, state: GanttState): Promise<void>
       await deleteDoc(doc(db, ITEMS_COL, action.itemId));
       break;
     default: break;
+  }
+}
+
+// ─── Undo: persist a restored snapshot ────────────────────────────────────────
+// Diffs the restored snapshot against the current data and writes the minimal
+// set of changes: delete docs that no longer exist, (re)create/overwrite docs
+// that changed. Committed in chunks to stay under Firestore's 500-op batch cap.
+
+async function restoreSnapshotToFirestore(prev: DataSnapshot, current: DataSnapshot): Promise<void> {
+  const groups: [string, { id: string }[], { id: string }[]][] = [
+    [PROJECTS_COL,       prev.projects,      current.projects],
+    [SUBGROUPS_COL,      prev.subgroups,     current.subgroups],
+    [ITEMS_COL,          prev.items,         current.items],
+    [VACATIONS_COL,      prev.vacations,     current.vacations],
+    [TASK_ROWS_COL,      prev.taskRows,      current.taskRows],
+    [MILESTONE_ROWS_COL, prev.milestoneRows, current.milestoneRows],
+  ];
+
+  type Op = { kind: 'set'; col: string; data: { id: string } } | { kind: 'delete'; col: string; id: string };
+  const ops: Op[] = [];
+
+  for (const [col, prevArr, curArr] of groups) {
+    const prevMap = new Map(prevArr.map(x => [x.id, x]));
+    const curMap  = new Map(curArr.map(x => [x.id, x]));
+    // Docs that exist now but not in the restored snapshot → delete
+    for (const x of curArr) if (!prevMap.has(x.id)) ops.push({ kind: 'delete', col, id: x.id });
+    // Docs in the snapshot that are new or changed → overwrite to match exactly
+    for (const x of prevArr) {
+      const cur = curMap.get(x.id);
+      if (!cur || JSON.stringify(cur) !== JSON.stringify(x)) ops.push({ kind: 'set', col, data: x });
+    }
+  }
+
+  for (let i = 0; i < ops.length; i += 400) {
+    const batch = writeBatch(db);
+    for (const op of ops.slice(i, i + 400)) {
+      if (op.kind === 'delete') batch.delete(doc(db, op.col, op.id));
+      else                      batch.set(doc(db, op.col, op.data.id), stripUndefined(op.data));
+    }
+    await batch.commit();
   }
 }
 
