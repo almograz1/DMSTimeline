@@ -1,10 +1,10 @@
 import React, { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useGantt } from '../context/GanttContext';
 import { useTimeline } from '../auth/TimelineContext';
-import type { CalendarRow, GanttTask, GanttMilestone, Project, Subgroup, MilestoneRow, TaskRow } from '../types';
+import type { CalendarRow, GanttTask, GanttMilestone, Project, Subgroup, MilestoneRow, TaskRow, ItemLink, ViewMode } from '../types';
 import {
   parseDate, formatDate, addDays, dayDiff,
-  buildDailyColumns, buildWeeklyColumns, buildMonthlyColumns, daysInMonth,
+  buildDailyColumns, buildWeeklyColumns, buildMonthlyColumns, buildYearlyColumns, daysInMonth,
   getISOWeekNumber, getDayName, getMonthName,
   isWeekend,
 } from '../utils/dateUtils';
@@ -18,6 +18,7 @@ const HEADER_H         = 60;
 const DAILY_COL_W      = 44;
 const WEEKLY_COL_W     = 120;
 const MONTHLY_COL_W    = 160;
+const YEARLY_COL_W     = 200;
 const TASK_BAR_H       = 22;
 const MILESTONE_SZ     = 14;
 const MILESTONE_NAME_H = 16;
@@ -25,9 +26,10 @@ const LABEL_W          = 90;
 const HANDLE_W         = 6;
 const MS_NAME_LINE     = 12; // vertical height of one stacked milestone-name tier
 
-function pxPerDay(viewMode: 'daily' | 'weekly' | 'monthly'): number {
+function pxPerDay(viewMode: ViewMode): number {
   if (viewMode === 'daily')   return DAILY_COL_W;
   if (viewMode === 'monthly') return MONTHLY_COL_W / 30.44; // approx px per day
+  if (viewMode === 'yearly')  return YEARLY_COL_W / 365.25; // approx px per day
   return WEEKLY_COL_W / 7;
 }
 
@@ -229,6 +231,50 @@ function milestoneLayout(
   return { tierOf, height: MILESTONE_ROW_H + maxTier * MS_NAME_LINE };
 }
 
+// ─── Unified lane ordering (tasks + task rows interleave) ─────────────────────
+// Within a swim-lane context, independent tasks and named task rows share one
+// vertical order space so they can be freely reordered/interleaved (milestones
+// stay pinned above, handled separately). Legacy data, where task orders and
+// task-row orders are independent sequences (and thus collide), falls back to
+// the original "tasks first, then task rows" layout until the user reorders —
+// a reorder assigns globally-unique orders, switching the lane to interleaved.
+type LaneEntry =
+  | { kind: 'item'; id: string; order: number; task: GanttTask }
+  | { kind: 'taskrow'; id: string; order: number; taskRow: TaskRow };
+
+function computeLaneEntries(independentTasks: GanttTask[], contextTaskRows: TaskRow[]): LaneEntry[] {
+  const entries: LaneEntry[] = [
+    ...independentTasks.map(t => ({ kind: 'item' as const, id: t.id, order: t.order ?? 0, task: t })),
+    ...contextTaskRows.map(r => ({ kind: 'taskrow' as const, id: r.id, order: r.order ?? 0, taskRow: r })),
+  ];
+  const orders = entries.map(e => e.order);
+  const allDistinct = orders.length > 0 && new Set(orders).size === orders.length;
+  if (allDistinct) {
+    entries.sort((a, b) => a.order - b.order);
+  } else {
+    entries.sort((a, b) => (a.kind === b.kind ? a.order - b.order : a.kind === 'item' ? -1 : 1));
+  }
+  return entries;
+}
+
+// ─── Chain links (rigid group) ────────────────────────────────────────────────
+// Links are undirected: the connected component of an item is the set of all
+// items that move together. Moving any one shifts the whole group by the same delta.
+function connectedComponent(startId: string, links: ItemLink[]): Set<string> {
+  const adj = new Map<string, string[]>();
+  const link = (a: string, b: string) => {
+    const arr = adj.get(a); if (arr) arr.push(b); else adj.set(a, [b]);
+  };
+  for (const l of links) { link(l.sourceId, l.targetId); link(l.targetId, l.sourceId); }
+  const seen = new Set<string>([startId]);
+  const stack = [startId];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    for (const nb of adj.get(cur) ?? []) if (!seen.has(nb)) { seen.add(nb); stack.push(nb); }
+  }
+  return seen;
+}
+
 // ─── Sub-component: Milestone With Label ──────────────────────────────────────
 
 function MilestoneWithLabel({ milestone, color, calStart, ppd, previewDate, onDragStart, onLabelClick, icon, onItemHover, onItemLeave, tier = 0, rowHeight = MILESTONE_ROW_H }: {
@@ -278,8 +324,38 @@ function MilestoneWithLabel({ milestone, color, calStart, ppd, previewDate, onDr
 // ─── Calendar Header ──────────────────────────────────────────────────────────
 
 function CalendarHeader({ columns, viewMode, colWidth, todayDate }: {
-  columns: Date[]; viewMode: 'daily' | 'weekly' | 'monthly'; colWidth: number; todayDate: string;
+  columns: Date[]; viewMode: ViewMode; colWidth: number; todayDate: string;
 }) {
+  // For yearly view: top row = decade span, bottom row = year
+  if (viewMode === 'yearly') {
+    const decadeSpans: { label: string; count: number }[] = [];
+    columns.forEach(col => {
+      const label = `${Math.floor(col.getFullYear() / 10) * 10}s`;
+      if (decadeSpans.length && decadeSpans[decadeSpans.length - 1].label === label) decadeSpans[decadeSpans.length - 1].count++;
+      else decadeSpans.push({ label, count: 1 });
+    });
+    const todayYear = new Date().getFullYear();
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', height: HEADER_H, borderBottom: '1.5px solid var(--border-strong)', background: 'var(--bg-header)', position: 'sticky', top: 0, zIndex: 5 }}>
+        <div style={{ display: 'flex', height: 24, borderBottom: '1px solid var(--border)' }}>
+          {decadeSpans.map(({ label, count }) => (
+            <div key={label} style={{ width: count * colWidth, flexShrink: 0, display: 'flex', alignItems: 'center', paddingLeft: 10, fontSize: 10.5, fontWeight: 700, color: 'var(--text-primary)', letterSpacing: '0.06em', textTransform: 'uppercase', borderRight: '1px solid var(--border)', overflow: 'hidden' }}>{label}</div>
+          ))}
+        </div>
+        <div style={{ display: 'flex', flex: 1 }}>
+          {columns.map((col, i) => {
+            const isCurrentYear = col.getFullYear() === todayYear;
+            return (
+              <div key={i} style={{ width: colWidth, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRight: '1px solid var(--border)', fontSize: 13, fontWeight: isCurrentYear ? 800 : 600, color: isCurrentYear ? 'var(--accent)' : 'var(--text-primary)', background: isCurrentYear ? 'var(--accent-light)' : 'transparent', overflow: 'hidden' }}>
+                {col.getFullYear()}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
   // For monthly view: top row = year, bottom row = month name
   // For weekly/daily: top row = month+year spans, bottom row = week/day
   if (viewMode === 'monthly') {
@@ -379,9 +455,17 @@ function DropIndicator({ color = 'var(--accent)' }: { color?: string }) {
 // ─── Main GanttChart ──────────────────────────────────────────────────────────
 
 export default function GanttChart() {
-  const { state, dispatch } = useGantt();
+  const { state, dispatch, genId } = useGantt();
   const { isViewOnly, activeTimeline } = useTimeline();
-  const { projects, subgroups, items, vacations, milestoneRows, taskRows, viewMode, calendarStart, calendarDays } = state;
+  const { projects, subgroups, items, vacations, milestoneRows, taskRows, links, viewMode, calendarStart, calendarDays } = state;
+
+  // ── Chaining (link mode) ──────────────────────────────────────────────────────
+  const [linkMode, setLinkMode]     = useState(false);
+  const [linkSource, setLinkSource] = useState<string | null>(null);
+  const linkModeRef   = useRef(linkMode);   linkModeRef.current   = linkMode;
+  const linkSourceRef = useRef(linkSource); linkSourceRef.current = linkSource;
+  const linksRef      = useRef(links);      linksRef.current      = links;
+  const itemsRef      = useRef(items);      itemsRef.current      = items;
 
   // ── Zoom — must be declared before ppd/colWidth which depend on zoomScale ──
   const ZOOM_LEVELS  = [0.6, 0.8, 1.0, 1.2] as const;
@@ -392,8 +476,8 @@ export default function GanttChart() {
   const today        = formatDate(new Date());
   const calStartDate = parseDate(calendarStart);
   const ppd          = pxPerDay(viewMode) * zoomScale;
-  const colWidth     = (viewMode === 'daily' ? DAILY_COL_W : viewMode === 'monthly' ? MONTHLY_COL_W : WEEKLY_COL_W) * zoomScale;
-  const numCols      = viewMode === 'daily' ? calendarDays : viewMode === 'monthly' ? Math.ceil(calendarDays / 30) + 2 : Math.ceil(calendarDays / 7);
+  const colWidth     = (viewMode === 'daily' ? DAILY_COL_W : viewMode === 'monthly' ? MONTHLY_COL_W : viewMode === 'yearly' ? YEARLY_COL_W : WEEKLY_COL_W) * zoomScale;
+  const numCols      = viewMode === 'daily' ? calendarDays : viewMode === 'monthly' ? Math.ceil(calendarDays / 30) + 2 : viewMode === 'yearly' ? Math.ceil(calendarDays / 365) + 2 : Math.ceil(calendarDays / 7);
 
   // ── Calendar drag (move/resize bars) ─────────────────────────────────────────
 
@@ -444,10 +528,35 @@ export default function GanttChart() {
     const drag    = calDragStateRef.current;
     const preview = calDragPreviewRef.current;
     if (drag && preview && preview.itemId === drag.itemId) {
-      if (drag.kind === 'move-milestone') {
-        dispatch({ type: 'UPDATE_ITEM', itemId: drag.itemId, patch: { date: preview.date } });
+      const draggedPatch = drag.kind === 'move-milestone'
+        ? { date: preview.date }
+        : { startDate: preview.startDate, endDate: preview.endDate };
+
+      // Only a *move* drags the whole chain; a resize changes one item's duration.
+      const isMove = drag.kind === 'move-task' || drag.kind === 'move-milestone';
+      const comp   = isMove ? connectedComponent(drag.itemId, linksRef.current) : new Set([drag.itemId]);
+
+      if (comp.size > 1) {
+        // Rigid group: shift every other linked item by the same day delta.
+        const delta = drag.kind === 'move-milestone'
+          ? dayDiff(parseDate(drag.originalDate), parseDate(preview.date!))
+          : dayDiff(parseDate(drag.originalStartDate), parseDate(preview.startDate!));
+        const updates: { itemId: string; patch: Partial<GanttTask> | Partial<GanttMilestone> }[] = [
+          { itemId: drag.itemId, patch: draggedPatch },
+        ];
+        for (const id of comp) {
+          if (id === drag.itemId) continue;
+          const it = itemsRef.current.find(i => i.id === id);
+          if (!it) continue;
+          if (it.type === 'milestone' && it.date) {
+            updates.push({ itemId: id, patch: { date: formatDate(addDays(parseDate(it.date), delta)) } });
+          } else if (it.type === 'task' && it.startDate && it.endDate) {
+            updates.push({ itemId: id, patch: { startDate: formatDate(addDays(parseDate(it.startDate), delta)), endDate: formatDate(addDays(parseDate(it.endDate), delta)) } });
+          }
+        }
+        dispatch({ type: 'UPDATE_ITEMS', updates });
       } else {
-        dispatch({ type: 'UPDATE_ITEM', itemId: drag.itemId, patch: { startDate: preview.startDate, endDate: preview.endDate } });
+        dispatch({ type: 'UPDATE_ITEM', itemId: drag.itemId, patch: draggedPatch });
       }
       // A click event fires right after this mouseup — swallow it so we don't open
       // the detail panel (and steal focus from Ctrl+Z) just from moving an item.
@@ -463,7 +572,7 @@ export default function GanttChart() {
   }, [dispatch, handleCalMouseMove]);
 
   const startCalDrag = useCallback((e: React.MouseEvent, kind: CalDragState['kind'], item: GanttTask | GanttMilestone) => {
-    if (isViewOnly) return;
+    if (isViewOnly || linkModeRef.current) return; // no dragging while linking
     e.preventDefault(); e.stopPropagation();
     const t = item as GanttTask;
     const m = item as GanttMilestone;
@@ -574,9 +683,9 @@ export default function GanttChart() {
         const insertAt = pos === 'after' ? toIdx + 1 : toIdx;
         newIds.splice(insertAt, 0, drag.id);
         dispatch({ type: 'REORDER_PROJECTS', orderedIds: newIds });
-      } else if (drag.kind === 'milestonerow' || drag.kind === 'taskrow') {
+      } else if (drag.kind === 'milestonerow') {
+        // Reorder named milestone rows within their project/subgroup context.
         const rows = rowsRef.current;
-
         const getRowKey = (r: typeof rows[0]): string => {
           if (r.kind === 'header')     return r.project.id;
           if (r.kind === 'subheader')  return 'sg-' + r.subgroup.id;
@@ -585,106 +694,74 @@ export default function GanttChart() {
           if (r.kind === 'milestones') return 'ms-' + r.project.id + '-' + (r.subgroup?.id ?? 'top') + '-' + (r.milestoneRow?.id ?? 'default');
           return '';
         };
-
         const isMyKind = (r: typeof rows[0]): boolean =>
-          drag.kind === 'taskrow'
-            ? r.kind === 'taskrow' && r.taskRow.projectId === drag.projectId
-            : r.kind === 'milestones' && !!r.milestoneRow && r.project.id === drag.projectId;
+          r.kind === 'milestones' && !!r.milestoneRow && r.project.id === drag.projectId;
+        const getId = (r: typeof rows[0]): string => (r as any).milestoneRow.id;
 
-        const getId = (r: typeof rows[0]): string =>
-          drag.kind === 'taskrow'
-            ? (r as any).taskRow.id
-            : (r as any).milestoneRow.id;
-
-        // Get all same-kind rows in current visual order (flat list order = display order)
         const kindRows = rows.filter(isMyKind);
-        if (kindRows.length < 1) return;
-
         const fromIdx = kindRows.findIndex(r => getId(r) === drag.id);
         if (fromIdx === -1) return;
-
-        // Find the visual position of the drop target in the full rows list
         const flatTargetIdx = rows.findIndex(r => getRowKey(r) === targetKey);
         if (flatTargetIdx === -1) return;
-
-        // Determine where in the same-kind list to insert:
-        // Count how many same-kind rows appear before the drop position (after accounting for before/after)
         const insertBeforeFlatIdx = pos === 'before' ? flatTargetIdx : flatTargetIdx + 1;
-
-        // Count same-kind rows that appear strictly before insertBeforeFlatIdx (excluding the dragged one)
         let insertBeforeKindIdx = 0;
         for (let i = 0; i < rows.length && i < insertBeforeFlatIdx; i++) {
-          if (isMyKind(rows[i]) && getId(rows[i]) !== drag.id) {
-            insertBeforeKindIdx++;
-          }
+          if (isMyKind(rows[i]) && getId(rows[i]) !== drag.id) insertBeforeKindIdx++;
         }
-
-        // Build new id order: remove from current position, insert at new position
         const ids = kindRows.map(getId);
-        ids.splice(fromIdx, 1); // remove
-        ids.splice(insertBeforeKindIdx, 0, drag.id); // insert
-
-        if (drag.kind === 'taskrow') {
-          const sgId = drag.subgroupId ?? null;
-          dispatch({ type: 'REORDER_TASK_ROWS', projectId: drag.projectId!, subgroupId: sgId, orderedIds: ids });
-        } else {
-          const sgId = drag.subgroupId ?? null;
-          dispatch({ type: 'REORDER_MILESTONE_ROWS', projectId: drag.projectId!, subgroupId: sgId, orderedIds: ids });
-        }
+        ids.splice(fromIdx, 1);
+        ids.splice(insertBeforeKindIdx, 0, drag.id);
+        dispatch({ type: 'REORDER_MILESTONE_ROWS', projectId: drag.projectId!, subgroupId: drag.subgroupId ?? null, orderedIds: ids });
       } else {
-        // ── Task drag: may be cross-subgroup ────────────────────────────────
-        // Determine what the drop target is:
-        //   'sg-<id>'   → dropped onto a subgroup header  → move into that subgroup
-        //   project id  → dropped onto a project header   → move to top-level (no subgroup)
-        //   task id     → dropped onto a sibling task     → reorder within same/new group
+        // ── Unified lane reorder: independent tasks + task rows share one order
+        //    space, so a task and a task row can be freely interleaved/swapped.
+        const dragKind: 'item' | 'taskrow' = drag.kind === 'taskrow' ? 'taskrow' : 'item';
 
-        let newSubgroupId: string | null | undefined = undefined; // undefined = no change
-
-        const targetIsSubgroupHeader = targetKey.startsWith('sg-');
-        const targetIsProjectHeader  = projects.some(p => p.id === targetKey);
-        const targetIsSiblingTask    = !targetIsSubgroupHeader && !targetIsProjectHeader;
-
-        if (targetIsSubgroupHeader) {
-          // Extract subgroup id from key 'sg-<subgroupId>'
-          newSubgroupId = targetKey.slice(3);
-        } else if (targetIsProjectHeader) {
-          newSubgroupId = null; // move to top-level
-        } else {
-          // Dropping onto another task — check what subgroup that task belongs to
-          const targetTask = items.find(i => i.id === targetKey);
-          if (targetTask) newSubgroupId = targetTask.subgroupId ?? null;
-        }
-
-        // If subgroup changed, update the item — also assign a new order so it
-        // doesn't collide with items already in the destination group
-        if (newSubgroupId !== undefined && newSubgroupId !== (drag.subgroupId ?? null)) {
-          const destItems = items.filter(i =>
-            i.projectId === drag.projectId && (i.subgroupId ?? null) === newSubgroupId && i.id !== drag.id
-          );
-          const maxOrder = destItems.length > 0 ? Math.max(...destItems.map(i => i.order ?? 0)) : -1000;
-          dispatch({ type: 'UPDATE_ITEM', itemId: drag.id, patch: { subgroupId: newSubgroupId, order: maxOrder + 1000 } });
-        }
-
-        // Only reorder if dropping onto a sibling task (not a header)
-        if (targetIsSiblingTask) {
-          const targetTask = items.find(i => i.id === targetKey);
-          if (!targetTask) return;
-          // Reorder within the destination subgroup
-          const destSubgroup = newSubgroupId !== undefined ? newSubgroupId : (drag.subgroupId ?? null);
-          const groupTasks = items.filter(i =>
-            i.projectId === drag.projectId &&
-            i.type === 'task' &&
-            (i.subgroupId ?? null) === destSubgroup &&
-            i.id !== drag.id
+        // Lane (item + taskrow) entries currently in a given project/subgroup context.
+        const laneEntriesFor = (pid: string, sg: string | null): { id: string; kind: 'item' | 'taskrow' }[] => {
+          const ctxRows = taskRows.filter(r => r.projectId === pid && (r.subgroupId ?? null) === sg);
+          const validRowIds = new Set(ctxRows.map(r => r.id));
+          const independentTasks = items.filter(i =>
+            i.projectId === pid && i.type === 'task' && (i.subgroupId ?? null) === sg &&
+            (!(i as GanttTask).taskRowId || !validRowIds.has((i as GanttTask).taskRowId!))
           ) as GanttTask[];
-          const ids = groupTasks.map(t => t.id);
-          let toIdx = ids.indexOf(targetKey);
-          if (toIdx === -1) return;
-          const insertAt = pos === 'after' ? toIdx + 1 : toIdx;
-          const newIds = [...ids];
-          newIds.splice(insertAt, 0, drag.id);
-          dispatch({ type: 'REORDER_ITEMS', projectId: drag.projectId!, subgroupId: destSubgroup, orderedIds: newIds });
+          return computeLaneEntries(independentTasks, ctxRows).map(e => ({ id: e.id, kind: e.kind }));
+        };
+
+        // Resolve the drop target → destination context (+ optional anchor row).
+        let ctxPid = drag.projectId!;
+        let ctxSg: string | null = drag.subgroupId ?? null;
+        let anchor: { id: string; kind: 'item' | 'taskrow' } | null = null;
+
+        if (targetKey.startsWith('sg-')) {
+          const sg = subgroups.find(s => s.id === targetKey.slice(3));
+          if (!sg) return;
+          ctxPid = sg.projectId; ctxSg = sg.id;
+        } else if (projects.some(p => p.id === targetKey)) {
+          ctxPid = targetKey; ctxSg = null;
+        } else if (targetKey.startsWith('tr-')) {
+          const tr = taskRows.find(r => r.id === targetKey.slice(3));
+          if (!tr) return;
+          ctxPid = tr.projectId; ctxSg = tr.subgroupId ?? null;
+          anchor = { id: tr.id, kind: 'taskrow' };
+        } else {
+          const tt = items.find(i => i.id === targetKey);
+          if (!tt) return;
+          ctxPid = tt.projectId; ctxSg = tt.subgroupId ?? null;
+          anchor = { id: tt.id, kind: 'item' };
         }
+
+        // Task rows can't change context (their child tasks would be orphaned).
+        if (dragKind === 'taskrow' && (ctxPid !== drag.projectId || ctxSg !== (drag.subgroupId ?? null))) return;
+
+        let ordered = laneEntriesFor(ctxPid, ctxSg).filter(e => !(e.id === drag.id && e.kind === dragKind));
+        let insertAt = ordered.length;
+        if (anchor) {
+          const ti = ordered.findIndex(e => e.id === anchor!.id && e.kind === anchor!.kind);
+          if (ti !== -1) insertAt = pos === 'after' ? ti + 1 : ti;
+        }
+        ordered.splice(insertAt, 0, { id: drag.id, kind: dragKind });
+        dispatch({ type: 'REORDER_LANE', projectId: ctxPid, subgroupId: ctxSg, ordered });
       }
     }
 
@@ -697,7 +774,7 @@ export default function GanttChart() {
     }
     document.addEventListener('mouseup', commitReorderAndCleanup);
     return () => document.removeEventListener('mouseup', commitReorderAndCleanup);
-  }, [projects, items, taskRows, dispatch]);
+  }, [projects, subgroups, items, taskRows, dispatch]);
 
   // ── Flat row list ─────────────────────────────────────────────────────────────
 
@@ -727,38 +804,35 @@ export default function GanttChart() {
       );
       const validTaskRowIds = new Set(contextTaskRows.map(r => r.id));
 
-      // Independent tasks: no taskRowId or stale taskRowId
-      const independentTasks = allTasks.filter(t => !t.taskRowId || !validTaskRowIds.has(t.taskRowId));
-      for (const task of independentTasks) result.push({ kind: 'item', item: task, project, subgroup });
-
-      // Named task rows for this context
-      for (const tRow of contextTaskRows) {
-        const rowTasks = allTasks.filter(t => t.taskRowId === tRow.id)
-          .sort((a,b) => (a.order??0)-(b.order??0)) as GanttTask[];
-        result.push({ kind: 'taskrow', tasks: rowTasks, project, subgroup, taskRow: tRow });
-      }
-
-      // Milestone rows scoped to this project+subgroup context
+      // Milestone rows scoped to this project+subgroup context — render FIRST (top)
       const contextMilestoneRows = milestoneRows.filter(r =>
         r.projectId === project.id && (r.subgroupId ?? null) === (subgroup?.id ?? null)
       );
-
       if (contextMilestoneRows.length === 0) {
-        // No named rows defined → single default row
         if (milestones.length > 0) result.push({ kind: 'milestones', milestones, project, subgroup });
       } else {
-        // One row per named milestone row — only show if it has milestones
         for (const mRow of contextMilestoneRows) {
           const rowMilestones = milestones.filter(m => m.milestoneRowId === mRow.id);
           if (rowMilestones.length > 0) {
             result.push({ kind: 'milestones', milestones: rowMilestones, project, subgroup, milestoneRow: mRow });
           }
         }
-        // Fallback: milestones not assigned to any named row
         const validRowIds = new Set(contextMilestoneRows.map(r => r.id));
         const unassigned = milestones.filter(m => !m.milestoneRowId || !validRowIds.has(m.milestoneRowId));
         if (unassigned.length > 0) {
           result.push({ kind: 'milestones', milestones: unassigned, project, subgroup });
+        }
+      }
+
+      // Independent tasks + named task rows share one order space (interleaved)
+      const independentTasks = allTasks.filter(t => !t.taskRowId || !validTaskRowIds.has(t.taskRowId));
+      for (const entry of computeLaneEntries(independentTasks, contextTaskRows)) {
+        if (entry.kind === 'item') {
+          result.push({ kind: 'item', item: entry.task, project, subgroup });
+        } else {
+          const rowTasks = allTasks.filter(t => t.taskRowId === entry.taskRow.id)
+            .sort((a,b) => (a.order??0)-(b.order??0)) as GanttTask[];
+          result.push({ kind: 'taskrow', tasks: rowTasks, project, subgroup, taskRow: entry.taskRow });
         }
       }
     }
@@ -795,12 +869,22 @@ export default function GanttChart() {
       const projectTaskRows = taskRows.filter(r => r.projectId === project.id && (r.subgroupId ?? null) === null);
       const validTaskRowIds = new Set(projectTaskRows.map(r => r.id));
 
-      // Independent top-level tasks (no taskRowId or stale taskRowId, no subgroup)
+      // Independent top-level tasks + project-level task rows share one order
+      // space and render interleaved (below the milestones, above subgroups).
       const topIndependentTasks = (items.filter(i =>
         isTopLevel(i) && i.type === 'task' &&
         (!i.taskRowId || !validTaskRowIds.has(i.taskRowId))
       ) as GanttTask[]).sort((a,b) => (a.order??0)-(b.order??0));
-      for (const task of topIndependentTasks) result.push({ kind: 'item', item: task, project });
+      for (const entry of computeLaneEntries(topIndependentTasks, projectTaskRows)) {
+        if (entry.kind === 'item') {
+          result.push({ kind: 'item', item: entry.task, project });
+        } else {
+          const rowTasks = (items.filter(i =>
+            i.projectId === project.id && i.type === 'task' && i.taskRowId === entry.taskRow.id
+          ) as GanttTask[]).sort((a,b) => (a.order??0)-(b.order??0));
+          result.push({ kind: 'taskrow', tasks: rowTasks, project, taskRow: entry.taskRow });
+        }
+      }
 
       // Subgroups (with their own tasks + milestone rows inside)
       for (const sg of projectSubgroups) {
@@ -809,14 +893,6 @@ export default function GanttChart() {
           const sgItems = items.filter(i => i.projectId === project.id && i.subgroupId === sg.id);
           pushItems(sgItems, project, sg);
         }
-      }
-
-      // Project-level task rows (subgroupId=null)
-      for (const tRow of projectTaskRows) {
-        const rowTasks = (items.filter(i =>
-          i.projectId === project.id && i.type === 'task' && i.taskRowId === tRow.id
-        ) as GanttTask[]).sort((a,b) => (a.order??0)-(b.order??0));
-        result.push({ kind: 'taskrow', tasks: rowTasks, project, taskRow: tRow });
       }
     }
     return result;
@@ -827,6 +903,7 @@ export default function GanttChart() {
     () => {
       if (viewMode === 'daily')   return buildDailyColumns(calStartDate, numCols);
       if (viewMode === 'monthly') return buildMonthlyColumns(calStartDate, numCols);
+      if (viewMode === 'yearly')  return buildYearlyColumns(calStartDate, numCols);
       return buildWeeklyColumns(calStartDate, numCols);
     },
     [calStartDate, viewMode, numCols]
@@ -837,7 +914,33 @@ export default function GanttChart() {
   // In monthly view, column headers start at the 1st of calStartDate's month (columns[0]),
   // not at calStartDate itself (which is a Monday, offset into the month).
   // All position calculations must use the same origin as the column headers.
-  const calRefDate = viewMode === 'monthly' ? columns[0] : calStartDate;
+  const calRefDate = (viewMode === 'monthly' || viewMode === 'yearly') ? columns[0] : calStartDate;
+
+  // ── Anchor points for chain connectors ────────────────────────────────────────
+  // Walk the flat rows (same height accumulation as the calendar grid) to map each
+  // placed item id → its on-canvas {x,y} so we can draw links between chained items.
+  const connectorLayout = useMemo(() => {
+    const pos = new Map<string, { x: number; y: number }>();
+    let top = 0;
+    const barCenter = (t: GanttTask, rowTop: number) => {
+      const left  = dayDiff(calRefDate, parseDate(t.startDate!)) * ppd;
+      const width = (dayDiff(parseDate(t.startDate!), parseDate(t.endDate!)) + 1) * ppd;
+      return { x: left + width / 2, y: rowTop + ROW_H / 2 };
+    };
+    for (const row of rows) {
+      const h = row.kind === 'milestones' ? milestoneLayout(row.milestones, ppd, calRefDate).height : ROW_H;
+      if (row.kind === 'item') {
+        if (row.item.startDate && row.item.endDate) pos.set(row.item.id, barCenter(row.item, top));
+      } else if (row.kind === 'taskrow') {
+        for (const t of row.tasks) if (t.startDate && t.endDate) pos.set(t.id, barCenter(t, top));
+      } else if (row.kind === 'milestones') {
+        const cy = top + (h - 8 - MILESTONE_SZ) + MILESTONE_SZ / 2; // diamond center
+        for (const m of row.milestones) if (m.date) pos.set(m.id, { x: dayDiff(calRefDate, parseDate(m.date)) * ppd + ppd / 2, y: cy });
+      }
+      top += h;
+    }
+    return { pos, height: top };
+  }, [rows, ppd, calRefDate]);
 
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
 
@@ -900,10 +1003,28 @@ export default function GanttChart() {
     anchorRect: DOMRect;
   } | null>(null);
 
+  // Link-mode click: first click picks a source, second click chains the two
+  // (then becomes the new source so you can build a chain in one sweep).
+  const handleLinkClick = useCallback((itemId: string) => {
+    const prev = linkSourceRef.current;
+    if (!prev) { setLinkSource(itemId); return; }
+    if (prev === itemId) { setLinkSource(null); return; }
+    const exists = linksRef.current.some(l =>
+      (l.sourceId === prev && l.targetId === itemId) || (l.sourceId === itemId && l.targetId === prev));
+    if (!exists) {
+      dispatch({ type: 'ADD_LINK', link: { id: genId(), userId: '', timelineId: '', sourceId: prev, targetId: itemId } });
+    }
+    setLinkSource(itemId);
+  }, [dispatch, genId]);
+  const handleLinkClickRef = useRef(handleLinkClick);
+  handleLinkClickRef.current = handleLinkClick;
+
   const openDetail = useCallback((item: GanttTask | GanttMilestone, projectColor: string, e: React.MouseEvent) => {
     e.stopPropagation();
     // Ignore the stray click that follows a drag-move/resize (see suppressClickRef).
     if (suppressClickRef.current) { suppressClickRef.current = false; return; }
+    // In link mode a click on an item is a chain action, not a detail open.
+    if (linkModeRef.current) { handleLinkClickRef.current(item.id); return; }
     const clickRect = new DOMRect(e.clientX, e.clientY, 0, 0);
     const effectiveColor = (item as GanttTask | GanttMilestone & { color?: string }).color ?? projectColor;
     setDetailPanel({ item, color: effectiveColor, projectColor, anchorRect: clickRect });
@@ -1016,7 +1137,7 @@ export default function GanttChart() {
   // ── Click handlers ────────────────────────────────────────────────────────────
 
   const handleTaskRowClick = useCallback((e: React.MouseEvent<HTMLDivElement>, task: GanttTask, rowEl: HTMLDivElement) => {
-    if (isViewOnly || calDragStateRef.current || calDragPreviewRef.current) return;
+    if (isViewOnly || linkModeRef.current || calDragStateRef.current || calDragPreviewRef.current) return;
     const dayOffset   = Math.floor((e.clientX - rowEl.getBoundingClientRect().left) / ppd);
     const clickedDate = formatDate(addDays(calRefDate, dayOffset));
     if (isVacationDate(clickedDate)) return; // blocked by vacation
@@ -1029,7 +1150,7 @@ export default function GanttChart() {
   }, [calRefDate, ppd, dispatch]);
 
   const handleMilestonesRowClick = useCallback((e: React.MouseEvent<HTMLDivElement>, milestones: GanttMilestone[], rowEl: HTMLDivElement) => {
-    if (isViewOnly || calDragStateRef.current || calDragPreviewRef.current) return;
+    if (isViewOnly || linkModeRef.current || calDragStateRef.current || calDragPreviewRef.current) return;
     const firstUnplaced = milestones.find(m => m.date === null);
     if (!firstUnplaced) return;
     const dayOffset   = Math.floor((e.clientX - rowEl.getBoundingClientRect().left) / ppd);
@@ -1138,7 +1259,7 @@ export default function GanttChart() {
 
             if (row.kind === 'taskrow') {
               const key = `tr-${row.taskRow.id}`;
-              const isTaskRowDrag = (rowDragKind === 'taskrow' || rowDragKind === 'milestonerow') && rowDragStateRef.current?.projectId === row.project.id;
+              const isTaskRowDrag = (rowDragKind === 'task' || rowDragKind === 'taskrow' || rowDragKind === 'milestonerow') && rowDragStateRef.current?.projectId === row.project.id;
               const showDropBefore = rowDropTarget === key && rowDropPosition === 'before' && isTaskRowDrag;
               const showDropAfter  = rowDropTarget === key && rowDropPosition === 'after'  && isTaskRowDrag;
               return (
@@ -1378,6 +1499,48 @@ export default function GanttChart() {
               );
             })}
 
+            {/* ── Chain connectors (overlay) ── */}
+            {(links.length > 0 || linkMode) && (
+              <svg
+                width={totalCalWidth} height={connectorLayout.height}
+                style={{ position: 'absolute', left: 0, top: 0, pointerEvents: 'none', zIndex: 6, overflow: 'visible' }}
+              >
+                {links.map(l => {
+                  const a = connectorLayout.pos.get(l.sourceId);
+                  const b = connectorLayout.pos.get(l.targetId);
+                  if (!a || !b) return null; // an endpoint is unplaced/off-rows
+                  return (
+                    <g key={l.id}>
+                      {/* visible connector */}
+                      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+                        stroke="var(--accent)" strokeWidth={2} strokeOpacity={0.55}
+                        strokeLinecap="round" strokeDasharray="1 5" />
+                      <circle cx={a.x} cy={a.y} r={3} fill="var(--accent)" />
+                      <circle cx={b.x} cy={b.y} r={3} fill="var(--accent)" />
+                      {/* wide invisible hit line — only clickable in link mode */}
+                      {linkMode && (
+                        <line x1={a.x} y1={a.y} x2={b.x} y2={b.y}
+                          stroke="transparent" strokeWidth={14}
+                          style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+                          onClick={e => { e.stopPropagation(); dispatch({ type: 'DELETE_LINK', linkId: l.id }); }}
+                        >
+                          <title>Click to remove this link</title>
+                        </line>
+                      )}
+                    </g>
+                  );
+                })}
+                {/* Highlight the currently-selected link source */}
+                {linkMode && linkSource && connectorLayout.pos.get(linkSource) && (
+                  <circle
+                    cx={connectorLayout.pos.get(linkSource)!.x}
+                    cy={connectorLayout.pos.get(linkSource)!.y}
+                    r={11} fill="none" stroke="var(--accent)" strokeWidth={2.5} strokeOpacity={0.9}
+                  />
+                )}
+              </svg>
+            )}
+
             {rows.length === 0 && (
               <div style={{ padding: '60px 40px', textAlign: 'center', color: 'var(--text-muted)' }}>
                 <div style={{ fontSize: 36, marginBottom: 12 }}>📊</div>
@@ -1390,6 +1553,22 @@ export default function GanttChart() {
       </div>
     </div>
 
+    {/* Link-mode banner */}
+    {linkMode && (
+      <div style={{
+        position: 'fixed', top: 'calc(var(--toolbar-h) + 10px)', left: '50%', transform: 'translateX(-50%)',
+        zIndex: 80, background: 'var(--accent)', color: '#fff', borderRadius: 999,
+        padding: '7px 16px', fontSize: 12, fontWeight: 600, boxShadow: '0 4px 16px rgba(0,0,0,0.18)',
+        display: 'flex', alignItems: 'center', gap: 12, pointerEvents: 'auto',
+      }}>
+        <span>🔗 {linkSource ? 'Now click the item to chain it to' : 'Click an item to start a chain'} — click a connector to remove it</span>
+        <button
+          onClick={() => { setLinkMode(false); setLinkSource(null); }}
+          style={{ background: 'rgba(255,255,255,0.25)', color: '#fff', borderRadius: 6, padding: '3px 10px', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+        >Done</button>
+      </div>
+    )}
+
     {/* Zoom controls — fixed bottom-left of calendar area */}
     <div style={{
       position: 'fixed', bottom: 20, left: 'calc(280px + 16px)', zIndex: 60,
@@ -1398,6 +1577,19 @@ export default function GanttChart() {
       borderRadius: 8, padding: '3px 4px',
       boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
     }}>
+      {!isViewOnly && (
+        <>
+          <button
+            onClick={() => { setLinkMode(m => { if (m) setLinkSource(null); return !m; }); }}
+            title="Link mode: click two items to chain them so they move together"
+            style={{ height: 24, padding: '0 8px', borderRadius: 5, fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer',
+              color: linkMode ? '#fff' : 'var(--text-secondary)', background: linkMode ? 'var(--accent)' : 'transparent' }}
+          >
+            🔗 Link
+          </button>
+          <div style={{ width: 1, height: 18, background: 'var(--border)', margin: '0 4px' }} />
+        </>
+      )}
       <button
         onClick={exportPDF}
         disabled={exporting}

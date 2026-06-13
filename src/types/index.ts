@@ -1,4 +1,4 @@
-export type ViewMode = 'daily' | 'weekly' | 'monthly';
+export type ViewMode = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 /** Timeline is a named workspace owned by one user */
 export interface Timeline {
@@ -85,6 +85,19 @@ export type CalendarRow =
   | { kind: 'item';       item: GanttTask;              project: Project; subgroup?: Subgroup }
   | { kind: 'taskrow';    tasks: GanttTask[];            project: Project; subgroup?: Subgroup; taskRow: TaskRow }
   | { kind: 'milestones'; milestones: GanttMilestone[]; project: Project; subgroup?: Subgroup; milestoneRow?: MilestoneRow };
+
+/**
+ * A link chains two items together. Links are undirected for movement purposes:
+ * every item in a connected group (chain) shifts by the same delta when any one
+ * of them is moved. sourceId/targetId are kept only to draw the connector.
+ */
+export interface ItemLink {
+  id: string;
+  userId: string;
+  timelineId: string;
+  sourceId: string;
+  targetId: string;
+}
 
 /** A vacation period blocks task/milestone placement across all swimlanes */
 export interface VacationPeriod {

@@ -104,6 +104,15 @@ export function buildMonthlyColumns(calStart: Date, monthCount: number): Date[] 
   });
 }
 
+/**
+ * Build an array of Jan-1 Date objects for yearly-view columns.
+ * Starts at January 1st of calStart's year, produces `yearCount` years.
+ */
+export function buildYearlyColumns(calStart: Date, yearCount: number): Date[] {
+  const startYear = calStart.getFullYear();
+  return Array.from({ length: yearCount }, (_, i) => new Date(startYear + i, 0, 1));
+}
+
 /** Number of days in a given month */
 export function daysInMonth(date: Date): number {
   return new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();

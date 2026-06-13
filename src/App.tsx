@@ -178,11 +178,14 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow,
   onAddProject: () => void; onAddSubgroup: () => void; onAddMilestoneRow: () => void; onAddTaskRow: () => void;
   onAddTask: () => void; onAddMilestone: () => void;
 }) {
-  const { state, dispatch, undo, canUndo } = useGantt();
+  const { state, dispatch } = useGantt();
   const { isViewOnly }      = useTimeline();
   const { viewMode }        = state;
   const hasProjects         = state.projects.length > 0;
   const pan = (days: number) => dispatch({ type: 'PAN_CALENDAR', days });
+  // Pan step sizes scale with the active view so the arrows feel consistent.
+  const smallStep = viewMode === 'yearly' ? 365 : viewMode === 'monthly' ? 30 : viewMode === 'weekly' ? 7  : 1;
+  const bigStep   = viewMode === 'yearly' ? 730 : viewMode === 'monthly' ? 90 : viewMode === 'weekly' ? 28 : 14;
 
   return (
     <div style={{
@@ -203,69 +206,42 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow,
 
       <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 2px' }} />
 
-      {/* Add buttons — hidden for view-only users */}
+      {/* Add menu — hidden for view-only users */}
       {isViewOnly ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 7, background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)' }}>
           <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 700 }}>View Only</span>
         </div>
       ) : (
-        <>
-          <TBtn onClick={onAddProject}  icon="＋" label="Swim Lane" accent />
-          {hasProjects && (
-            <>
-              <TBtn onClick={onAddSubgroup}     icon="▤" label="Subgroup" />
-              <TBtn onClick={onAddMilestoneRow} icon="◆" label="M. Row" />
-              <TBtn onClick={onAddTaskRow}     icon="▬▬" label="T. Row" />
-              <TBtn onClick={onAddTask}         icon="▬" label="Task" />
-              <TBtn onClick={onAddMilestone}    icon="◇" label="Milestone" />
-            </>
-          )}
-        </>
+        <AddMenu
+          hasProjects={hasProjects}
+          onAddProject={onAddProject} onAddSubgroup={onAddSubgroup}
+          onAddMilestoneRow={onAddMilestoneRow} onAddTaskRow={onAddTaskRow}
+          onAddTask={onAddTask} onAddMilestone={onAddMilestone}
+        />
       )}
 
       <div style={{ flex: 1 }} />
 
-      {/* Undo */}
-      {!isViewOnly && (
-        <>
-          <button
-            onClick={undo}
-            disabled={!canUndo}
-            title="Undo (Ctrl+Z)"
-            style={{
-              minWidth: 28, height: 28, borderRadius: 6, padding: '0 7px',
-              background: 'rgba(255,255,255,0.07)', color: 'var(--toolbar-text)',
-              fontSize: 14, fontWeight: 600, border: '1px solid rgba(255,255,255,0.10)',
-              opacity: canUndo ? 1 : 0.35, cursor: canUndo ? 'pointer' : 'not-allowed',
-              transition: 'background 0.15s',
-            }}
-            onMouseEnter={e => { if (canUndo) (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.13)'; }}
-            onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.07)'; }}
-          >↶</button>
-          <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
-        </>
-      )}
-
       {/* Navigation */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <TIconBtn onClick={() => pan(-(viewMode === 'monthly' ? 90 : viewMode === 'weekly' ? 28 : 14))}>‹‹</TIconBtn>
-        <TIconBtn onClick={() => pan(-(viewMode === 'weekly' ? 7  : 1 ))}>‹</TIconBtn>
+        <TIconBtn onClick={() => pan(-bigStep)}>‹‹</TIconBtn>
+        <TIconBtn onClick={() => pan(-smallStep)}>‹</TIconBtn>
         <TIconBtn onClick={() => dispatch({ type: 'GO_TO_TODAY' })} label="Today" />
-        <TIconBtn onClick={() => pan(+(viewMode === 'weekly' ? 7  : 1 ))}>›</TIconBtn>
-        <TIconBtn onClick={() => pan(+(viewMode === 'monthly' ? 90 : viewMode === 'weekly' ? 28 : 14))}>››</TIconBtn>
+        <TIconBtn onClick={() => pan(+smallStep)}>›</TIconBtn>
+        <TIconBtn onClick={() => pan(+bigStep)}>››</TIconBtn>
       </div>
 
       <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
 
       {/* View toggle */}
       <div style={{ display: 'flex', background: 'rgba(255,255,255,0.07)', borderRadius: 7, padding: 2, gap: 2 }}>
-        {(['daily', 'weekly', 'monthly'] as const).map(mode => (
+        {(['daily', 'weekly', 'monthly', 'yearly'] as const).map(mode => (
           <button key={mode} onClick={() => dispatch({ type: 'SET_VIEW_MODE', viewMode: mode })}
             style={{ padding: '4px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600,
               background: viewMode === mode ? 'rgba(255,255,255,0.15)' : 'transparent',
               color: viewMode === mode ? '#fff' : 'var(--toolbar-text)', transition: 'background 0.15s',
             }}>
-            {mode === 'daily' ? '☀ Day' : mode === 'weekly' ? '📅 Week' : '🗓 Month'}
+            {mode === 'daily' ? '☀ Day' : mode === 'weekly' ? '📅 Week' : mode === 'monthly' ? '🗓 Month' : '📆 Year'}
           </button>
         ))}
       </div>
@@ -276,21 +252,72 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow,
   );
 }
 
-function TBtn({ onClick, icon, label, accent = false }: { onClick: () => void; icon: string; label: string; accent?: boolean }) {
-  return (
-    <button onClick={onClick}
-      onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = accent ? 'linear-gradient(135deg,#5b54f5,#7c3aed)' : 'rgba(255,255,255,0.13)'; }}
-      onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = accent ? 'linear-gradient(135deg,#4f46e5,#7c3aed)' : 'rgba(255,255,255,0.07)'; }}
-      style={{
-        display: 'flex', alignItems: 'center', gap: 5, padding: '5px 11px', borderRadius: 7,
-        fontSize: 11.5, fontWeight: 600, letterSpacing: '0.01em',
-        background: accent ? 'linear-gradient(135deg,#4f46e5,#7c3aed)' : 'rgba(255,255,255,0.07)',
-        color: '#fff', border: accent ? 'none' : '1px solid rgba(255,255,255,0.11)',
-        transition: 'background 0.15s', whiteSpace: 'nowrap',
-        boxShadow: accent ? '0 2px 8px rgba(79,70,229,0.4)' : 'none',
-      }}>
-      <span style={{ fontSize: 11, opacity: 0.85 }}>{icon}</span>{label}
+// ─── Add Menu (consolidated create dropdown) ──────────────────────────────────
+
+function AddMenu({ hasProjects, onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow, onAddTask, onAddMilestone }: {
+  hasProjects: boolean;
+  onAddProject: () => void; onAddSubgroup: () => void; onAddMilestoneRow: () => void;
+  onAddTaskRow: () => void; onAddTask: () => void; onAddMilestone: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  const item = (icon: string, label: string, onClick: () => void) => (
+    <button
+      key={label}
+      onClick={() => { onClick(); setOpen(false); }}
+      onMouseEnter={e => (e.currentTarget.style.background = 'var(--bg-app)')}
+      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+      style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '8px 10px', borderRadius: 7, background: 'transparent', color: 'var(--text-primary)', fontSize: 12.5, fontWeight: 600, textAlign: 'left' }}
+    >
+      <span style={{ width: 18, textAlign: 'center', opacity: 0.7, fontSize: 12 }}>{icon}</span>{label}
     </button>
+  );
+  const divider = (k: string) => <div key={k} style={{ height: 1, background: 'var(--border)', margin: '5px 6px' }} />;
+  const sectionLabel = (text: string) => <div key={text} style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.06em', padding: '6px 10px 3px' }}>{text}</div>;
+
+  return (
+    <div style={{ position: 'relative' }}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'linear-gradient(135deg,#5b54f5,#7c3aed)'; }}
+        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'linear-gradient(135deg,#4f46e5,#7c3aed)'; }}
+        style={{
+          display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 7,
+          fontSize: 12, fontWeight: 700, color: '#fff', whiteSpace: 'nowrap',
+          background: 'linear-gradient(135deg,#4f46e5,#7c3aed)', boxShadow: '0 2px 8px rgba(79,70,229,0.4)',
+        }}
+      >
+        ＋ Add <span style={{ fontSize: 8, opacity: 0.85 }}>▼</span>
+      </button>
+
+      {open && (
+        <>
+          <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setOpen(false)} />
+          <div style={{
+            position: 'absolute', left: 0, top: 38, zIndex: 100,
+            background: 'var(--bg-surface)', borderRadius: 10, padding: 6,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.18)', border: '1px solid var(--border)', minWidth: 190,
+          }}>
+            {item('＋', 'Swim Lane', onAddProject)}
+            {hasProjects ? [
+              divider('d1'),
+              sectionLabel('Items'),
+              item('▬', 'Task', onAddTask),
+              item('◇', 'Milestone', onAddMilestone),
+              divider('d2'),
+              sectionLabel('Rows & Groups'),
+              item('▬▬', 'Task Row', onAddTaskRow),
+              item('◆', 'Milestone Row', onAddMilestoneRow),
+              item('▤', 'Subgroup', onAddSubgroup),
+            ] : (
+              <div style={{ fontSize: 11, color: 'var(--text-muted)', padding: '8px 10px 4px', lineHeight: 1.45 }}>
+                Add a swim lane first to create tasks, milestones, and rows.
+              </div>
+            )}
+          </div>
+        </>
+      )}
+    </div>
   );
 }
 
