@@ -23,11 +23,80 @@ const MILESTONE_SZ     = 14;
 const MILESTONE_NAME_H = 16;
 const LABEL_W          = 90;
 const HANDLE_W         = 6;
+const MS_NAME_LINE     = 12; // vertical height of one stacked milestone-name tier
 
 function pxPerDay(viewMode: 'daily' | 'weekly' | 'monthly'): number {
   if (viewMode === 'daily')   return DAILY_COL_W;
   if (viewMode === 'monthly') return MONTHLY_COL_W / 30.44; // approx px per day
   return WEEKLY_COL_W / 7;
+}
+
+// ─── Hover tooltip ────────────────────────────────────────────────────────────
+
+/** Human-friendly date, e.g. "Mon 15 Jun 2026" */
+function prettyDate(iso: string): string {
+  const d = parseDate(iso);
+  return `${getDayName(d)} ${d.getDate()} ${getMonthName(d)} ${d.getFullYear()}`;
+}
+
+/** Callback a bar/milestone fires to request the floating tooltip */
+type ItemHoverFn = (item: GanttTask | GanttMilestone, color: string, e: React.MouseEvent) => void;
+
+interface TooltipState { item: GanttTask | GanttMilestone; color: string; x: number; y: number }
+
+/** Floating, richly-formatted hover card rendered above everything (fixed position). */
+function HoverTooltip({ tip }: { tip: TooltipState }) {
+  const { item, color } = tip;
+  // Keep the card on-screen: flip to the left/up when near the viewport edge.
+  const W = 260;
+  const left = Math.min(tip.x + 16, window.innerWidth - W - 12);
+  const top  = Math.min(tip.y + 18, window.innerHeight - 140);
+
+  let dateLine: React.ReactNode;
+  if (item.type === 'milestone') {
+    dateLine = item.date
+      ? <span>{prettyDate(item.date)}</span>
+      : <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Not scheduled</span>;
+  } else {
+    if (item.startDate && item.endDate) {
+      const days = dayDiff(parseDate(item.startDate), parseDate(item.endDate)) + 1;
+      dateLine = (
+        <span>
+          {prettyDate(item.startDate)} <span style={{ color: 'var(--text-muted)' }}>→</span> {prettyDate(item.endDate)}
+          <span style={{ color: 'var(--text-muted)', marginLeft: 6 }}>· {days} day{days === 1 ? '' : 's'}</span>
+        </span>
+      );
+    } else if (item.startDate) {
+      dateLine = <span>Starts {prettyDate(item.startDate)} <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>· end not set</span></span>;
+    } else {
+      dateLine = <span style={{ color: 'var(--text-muted)', fontStyle: 'italic' }}>Not scheduled</span>;
+    }
+  }
+
+  return (
+    <div style={{
+      position: 'fixed', left, top, width: W, zIndex: 400, pointerEvents: 'none',
+      background: 'var(--bg-surface)', border: '1px solid var(--border)',
+      borderLeft: `3px solid ${color}`,
+      borderRadius: 10, boxShadow: '0 8px 28px rgba(0,0,0,0.18), 0 2px 8px rgba(0,0,0,0.08)',
+      padding: '10px 12px', display: 'flex', flexDirection: 'column', gap: 6,
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+        <span style={{ fontSize: 11, flexShrink: 0 }}>{item.type === 'milestone' ? '◆' : '▬'}</span>
+        <span style={{ fontWeight: 700, fontSize: 13, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {item.name?.trim() || 'Untitled'}
+        </span>
+      </div>
+      <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+        {dateLine}
+      </div>
+      {item.description?.trim() && (
+        <div style={{ fontSize: 11.5, color: 'var(--text-secondary)', lineHeight: 1.5, borderTop: '1px solid var(--border)', paddingTop: 6, whiteSpace: 'pre-wrap', wordBreak: 'break-word', maxHeight: 120, overflow: 'hidden' }}>
+          {item.description.trim()}
+        </div>
+      )}
+    </div>
+  );
 }
 
 // ─── Calendar Drag Types ──────────────────────────────────────────────────────
@@ -71,9 +140,11 @@ interface TaskBarProps {
   preview?: { startDate: string | null; endDate: string | null };
   onDragStart: (e: React.MouseEvent, kind: 'move-task' | 'resize-left' | 'resize-right') => void;
   onBarClick?: (e: React.MouseEvent) => void;
+  onItemHover?: (e: React.MouseEvent) => void;
+  onItemLeave?: () => void;
 }
 
-function TaskBar({ task, color, calStart, ppd, rowH, preview, onDragStart, onBarClick }: TaskBarProps) {
+function TaskBar({ task, color, calStart, ppd, rowH, preview, onDragStart, onBarClick, onItemHover, onItemLeave }: TaskBarProps) {
   const startDate = preview?.startDate ?? task.startDate;
   const endDate   = preview?.endDate   ?? task.endDate;
 
@@ -89,7 +160,8 @@ function TaskBar({ task, color, calStart, ppd, rowH, preview, onDragStart, onBar
         width: TASK_BAR_H, height: TASK_BAR_H, borderRadius: 5,
         background: color + '60', border: `2px dashed ${color}`,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-      }} title={`Start: ${startDate} — click row to set end date`}>
+      }}
+      onMouseEnter={onItemHover} onMouseMove={onItemHover} onMouseLeave={onItemLeave}>
         <span style={{ color, fontSize: 14, fontWeight: 700 }}>→</span>
       </div>
     );
@@ -107,8 +179,8 @@ function TaskBar({ task, color, calStart, ppd, rowH, preview, onDragStart, onBar
         display: 'flex', alignItems: 'center', overflow: 'hidden',
         boxShadow: `0 1px 4px ${color}55`, cursor: 'grab', userSelect: 'none',
       }}
-      title={`${task.name}: ${startDate} → ${endDate}`}
-      onMouseDown={e => { e.stopPropagation(); onDragStart(e, 'move-task'); }}
+      onMouseEnter={onItemHover} onMouseMove={onItemHover} onMouseLeave={onItemLeave}
+      onMouseDown={e => { e.stopPropagation(); onItemLeave?.(); onDragStart(e, 'move-task'); }}
       onClick={e => { e.stopPropagation(); onBarClick?.(e); }}
     >
       <div
@@ -130,34 +202,74 @@ function TaskBar({ task, color, calStart, ppd, rowH, preview, onDragStart, onBar
   );
 }
 
+// ─── Milestone label layout (collision-aware staggering) ─────────────────────
+// When milestone labels (LABEL_W wide, centered on their date) would overlap, we
+// stack the colliding ones onto separate vertical tiers so names stay readable.
+// Returns the tier index per milestone id and the total row height it requires.
+function milestoneLayout(
+  milestones: GanttMilestone[], ppd: number, calStart: Date,
+): { tierOf: Record<string, number>; height: number } {
+  const placed = milestones
+    .filter(m => m.date)
+    .map(m => ({ id: m.id, center: dayDiff(calStart, parseDate(m.date!)) * ppd + ppd / 2 }))
+    .sort((a, b) => a.center - b.center);
+
+  const GAP = 6;
+  const tierRight: number[] = []; // right edge currently occupied in each tier
+  const tierOf: Record<string, number> = {};
+  for (const p of placed) {
+    const left  = p.center - LABEL_W / 2;
+    const right = p.center + LABEL_W / 2;
+    let t = 0;
+    while (t < tierRight.length && tierRight[t] > left - GAP) t++; // first tier with room
+    tierOf[p.id]  = t;
+    tierRight[t]  = right;
+  }
+  const maxTier = tierRight.length > 0 ? tierRight.length - 1 : 0;
+  return { tierOf, height: MILESTONE_ROW_H + maxTier * MS_NAME_LINE };
+}
+
 // ─── Sub-component: Milestone With Label ──────────────────────────────────────
 
-function MilestoneWithLabel({ milestone, color, calStart, ppd, previewDate, onDragStart, onLabelClick, icon }: {
+function MilestoneWithLabel({ milestone, color, calStart, ppd, previewDate, onDragStart, onLabelClick, icon, onItemHover, onItemLeave, tier = 0, rowHeight = MILESTONE_ROW_H }: {
   milestone: GanttMilestone; color: string; calStart: Date; ppd: number;
   previewDate?: string | null; onDragStart: (e: React.MouseEvent) => void;
   onLabelClick?: (e: React.MouseEvent) => void;
   icon?: string; // custom icon from milestone row; defaults to diamond shape
+  onItemHover?: (e: React.MouseEvent) => void;
+  onItemLeave?: () => void;
+  tier?: number;       // vertical stagger tier (0 = nearest the diamond)
+  rowHeight?: number;  // full height of the milestone row (grows with tier count)
 }) {
   const date = previewDate !== undefined ? previewDate : milestone.date;
   if (!date) return null;
   const centerX = dayDiff(calStart, parseDate(date)) * ppd + ppd / 2;
   // If icon is a non-diamond emoji/char, render it as text; otherwise render the rotated diamond div
   const isEmoji = icon && icon !== '◆';
+
+  // Diamonds sit on a common line near the bottom; names fan upward by tier so
+  // labels that would collide horizontally stack onto separate rows instead.
+  const BOTTOM_PAD = 8;
+  const diamondTop = rowHeight - BOTTOM_PAD - MILESTONE_SZ;
+  const nameTop    = diamondTop - 2 - (tier + 1) * MS_NAME_LINE;
+  const connectorTop = nameTop + MS_NAME_LINE;
+  const connectorH   = Math.max(0, diamondTop - connectorTop);
+
   return (
     <div
-      title={`${milestone.name}: ${date}`}
-      style={{ position: 'absolute', left: centerX - LABEL_W / 2, top: 0, width: LABEL_W, height: MILESTONE_ROW_H, display: 'flex', flexDirection: 'column', alignItems: 'center', paddingTop: 4, cursor: 'grab', userSelect: 'none' }}
-      onMouseDown={e => { e.stopPropagation(); onDragStart(e); }}
+      style={{ position: 'absolute', left: centerX - LABEL_W / 2, top: 0, width: LABEL_W, height: rowHeight, cursor: 'grab', userSelect: 'none' }}
+      onMouseEnter={onItemHover} onMouseMove={onItemHover} onMouseLeave={onItemLeave}
+      onMouseDown={e => { e.stopPropagation(); onItemLeave?.(); onDragStart(e); }}
       onClick={e => { e.stopPropagation(); onLabelClick?.(e); }}
     >
-      <span style={{ fontSize: 10, fontWeight: 700, color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: LABEL_W, lineHeight: `${MILESTONE_NAME_H}px`, textAlign: 'center', textShadow: '0 0 4px #fff, 0 0 4px #fff', pointerEvents: 'none' }}>
+      <span style={{ position: 'absolute', left: 0, top: nameTop, width: LABEL_W, height: MS_NAME_LINE, fontSize: 10, fontWeight: 700, color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: `${MS_NAME_LINE}px`, textAlign: 'center', textShadow: '0 0 4px #fff, 0 0 4px #fff', pointerEvents: 'none' }}>
         {milestone.name}
       </span>
-      <div style={{ width: 1, height: 4, background: color + '80', flexShrink: 0, pointerEvents: 'none' }} />
+      <div style={{ position: 'absolute', left: LABEL_W / 2 - 0.5, top: connectorTop, width: 1, height: connectorH, background: color + '80', pointerEvents: 'none' }} />
       {isEmoji ? (
-        <span style={{ fontSize: MILESTONE_SZ + 2, lineHeight: 1, pointerEvents: 'none', filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.2))' }}>{icon}</span>
+        <span style={{ position: 'absolute', left: LABEL_W / 2 - (MILESTONE_SZ + 2) / 2, top: diamondTop - 1, fontSize: MILESTONE_SZ + 2, lineHeight: 1, pointerEvents: 'none', filter: 'drop-shadow(0 2px 3px rgba(0,0,0,0.2))' }}>{icon}</span>
       ) : (
-        <div style={{ width: MILESTONE_SZ, height: MILESTONE_SZ, background: color, transform: 'rotate(45deg)', borderRadius: 3, boxShadow: '0 2px 6px ' + color + '55', boxShadow: `0 2px 6px ${color}66`, flexShrink: 0, pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', left: LABEL_W / 2 - MILESTONE_SZ / 2, top: diamondTop, width: MILESTONE_SZ, height: MILESTONE_SZ, background: color, transform: 'rotate(45deg)', borderRadius: 3, boxShadow: `0 2px 6px ${color}66`, pointerEvents: 'none' }} />
       )}
     </div>
   );
@@ -268,7 +380,7 @@ function DropIndicator({ color = 'var(--accent)' }: { color?: string }) {
 
 export default function GanttChart() {
   const { state, dispatch } = useGantt();
-  const { isViewOnly }      = useTimeline();
+  const { isViewOnly, activeTimeline } = useTimeline();
   const { projects, subgroups, items, vacations, milestoneRows, taskRows, viewMode, calendarStart, calendarDays } = state;
 
   // ── Zoom — must be declared before ppd/colWidth which depend on zoomScale ──
@@ -287,6 +399,10 @@ export default function GanttChart() {
 
   const calDragStateRef   = useRef<CalDragState | null>(null);
   const calDragPreviewRef = useRef<CalDragPreview | null>(null);
+  // A drag ends with a stray browser `click` on the moved element; this flag tells
+  // the click handlers to ignore that one click so dragging doesn't pop open the
+  // detail panel (which would steal focus and swallow the user's Ctrl+Z undo).
+  const suppressClickRef  = useRef(false);
   const [calDragTick, setCalDragTick] = useState(0);
 
   const handleCalMouseMove = useCallback((e: MouseEvent) => {
@@ -333,6 +449,10 @@ export default function GanttChart() {
       } else {
         dispatch({ type: 'UPDATE_ITEM', itemId: drag.itemId, patch: { startDate: preview.startDate, endDate: preview.endDate } });
       }
+      // A click event fires right after this mouseup — swallow it so we don't open
+      // the detail panel (and steal focus from Ctrl+Z) just from moving an item.
+      suppressClickRef.current = true;
+      setTimeout(() => { suppressClickRef.current = false; }, 60);
     }
     calDragStateRef.current   = null;
     calDragPreviewRef.current = null;
@@ -374,6 +494,7 @@ export default function GanttChart() {
    * rowDropPosition: 'before' | 'after' — which side of the target to insert at
    */
   const ganttScrollRef = useRef<HTMLDivElement>(null);
+  const chartContentRef = useRef<HTMLDivElement>(null); // full-size content node for PDF export
   const rowDragStateRef                                     = useRef<RowDragState | null>(null);
   const rowsRef         = useRef<CalendarRow[]>([]);
   const [rowDragKind, setRowDragKind]                       = useState<RowDragState['kind'] | null>(null);
@@ -720,6 +841,57 @@ export default function GanttChart() {
 
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
 
+  // ── Hover tooltip (rich card over a bar/milestone) ─────────────────────────────
+  const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const showItemTip = useCallback<ItemHoverFn>((item, color, e) => {
+    if (calDragStateRef.current) return; // suppress while dragging
+    setTooltip({ item, color, x: e.clientX, y: e.clientY });
+  }, []);
+  const hideItemTip = useCallback(() => setTooltip(null), []);
+
+  // ── PDF export ─────────────────────────────────────────────────────────────────
+  // Rasterizes the full (non-scrolled) chart content at high DPI and drops it into a
+  // single-page PDF sized to the content, so the whole timeline exports crisply.
+  const [exporting, setExporting] = useState(false);
+  const exportPDF = useCallback(async () => {
+    const node = chartContentRef.current;
+    if (!node || exporting) return;
+    setExporting(true);
+    setTooltip(null);
+    try {
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf'),
+      ]);
+      const fullW = node.scrollWidth;
+      const fullH = node.scrollHeight;
+      // Cap the largest dimension so we stay within browser canvas limits while
+      // still rendering at >1× for a sharp result.
+      const scale = Math.max(1, Math.min(2, 12000 / Math.max(fullW, fullH)));
+      const canvas = await html2canvas(node, {
+        backgroundColor: '#ffffff',
+        scale,
+        width: fullW, height: fullH,
+        windowWidth: fullW, windowHeight: fullH,
+        scrollX: 0, scrollY: 0,
+      });
+      const pdf = new jsPDF({
+        orientation: fullW >= fullH ? 'landscape' : 'portrait',
+        unit: 'px',
+        format: [fullW, fullH],
+        compress: true,
+      });
+      pdf.addImage(canvas, 'PNG', 0, 0, fullW, fullH, undefined, 'FAST');
+      const safeName = (activeTimeline?.name || 'timeline').replace(/[^\w.-]+/g, '_');
+      pdf.save(`${safeName}-${today}.pdf`);
+    } catch (err) {
+      console.error('[Export] PDF export failed:', err);
+      window.alert('PDF export failed: ' + (err instanceof Error ? err.message : String(err)));
+    } finally {
+      setExporting(false);
+    }
+  }, [exporting, activeTimeline, today]);
+
   // ── Detail panel ──────────────────────────────────────────────────────────────
   const [detailPanel, setDetailPanel] = useState<{
     item: GanttTask | GanttMilestone;
@@ -730,6 +902,8 @@ export default function GanttChart() {
 
   const openDetail = useCallback((item: GanttTask | GanttMilestone, projectColor: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    // Ignore the stray click that follows a drag-move/resize (see suppressClickRef).
+    if (suppressClickRef.current) { suppressClickRef.current = false; return; }
     const clickRect = new DOMRect(e.clientX, e.clientY, 0, 0);
     const effectiveColor = (item as GanttTask | GanttMilestone & { color?: string }).color ?? projectColor;
     setDetailPanel({ item, color: effectiveColor, projectColor, anchorRect: clickRect });
@@ -788,7 +962,7 @@ export default function GanttChart() {
     let currentSubgroupId: string | null = null;
 
     for (const row of rows) {
-      const rowHeight = row.kind === 'milestones' ? MILESTONE_ROW_H : ROW_H;
+      const rowHeight = row.kind === 'milestones' ? milestoneLayout(row.milestones, ppd, calRefDate).height : ROW_H;
       if (relativeY < accumulated + rowHeight) {
         if (row.kind === 'header') {
           currentProjectId  = row.project.id;
@@ -819,7 +993,7 @@ export default function GanttChart() {
     }
 
     return { projectId: currentProjectId, subgroupId: currentSubgroupId, taskRowId: null };
-  }, [rows, projects, ganttScrollRef]);
+  }, [rows, projects, ganttScrollRef, ppd, calRefDate]);
 
   /** Returns true if the given ISO date falls within any vacation period */
   const isVacationDate = useCallback((date: string): boolean => {
@@ -872,7 +1046,7 @@ export default function GanttChart() {
   return (
     <>
     <div ref={ganttScrollRef} className='gantt-scroll' onContextMenu={e => e.preventDefault()} style={{ flex: 1, overflow: 'auto', display: 'flex', background: 'var(--bg-surface)' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', minWidth: LEFT_W + totalCalWidth, minHeight: '100%' }}>
+      <div ref={chartContentRef} style={{ display: 'flex', flexDirection: 'column', minWidth: LEFT_W + totalCalWidth, minHeight: '100%' }}>
 
         {/* ── SHARED HEADER ROW ─────────────────────────────────────────────
             The left-panel header and the calendar date header live in ONE flex
@@ -1036,7 +1210,7 @@ export default function GanttChart() {
                   {showDropBefore && <DropIndicator color={row.project.color} />}
                   <LeftPanelMilestonesRow
                     ref={row.milestoneRow ? (el => { if (el) rowRefs.current.set(rowKey, el); else rowRefs.current.delete(rowKey); }) : undefined}
-                    row={row} rowH={MILESTONE_ROW_H}
+                    row={row} rowH={milestoneLayout(row.milestones, ppd, calRefDate).height}
                     isHovered={hoveredKey === rowKey}
                     onHover={setHoveredKey}
                     onDeleteMilestone={isViewOnly ? undefined : id => dispatch({ type: 'DELETE_ITEM', itemId: id })}
@@ -1131,6 +1305,8 @@ export default function GanttChart() {
                     onRowClick={handleTaskRowClick}
                     onDragStart={(e, kind) => startCalDrag(e, kind, task)}
                     onBarClick={isViewOnly ? undefined : e => openDetail(task, task.color ?? row.project.color, e)}
+                    onItemHover={showItemTip}
+                    onItemLeave={hideItemTip}
                     today={today}
                   />
                 );
@@ -1156,6 +1332,8 @@ export default function GanttChart() {
                     onRowClick={handleTaskRowClick}
                     onDragStart={(e, kind, task) => startCalDrag(e, kind, task)}
                     dragPreview={calDragPreview}
+                    onItemHover={showItemTip}
+                    onItemLeave={hideItemTip}
                     today={today}
                   />
                 );
@@ -1175,11 +1353,12 @@ export default function GanttChart() {
                 );
               }
 
+              const msLayout = milestoneLayout(row.milestones, ppd, calRefDate);
               return (
                 <CalendarMilestonesRow
                   key={`ms-${row.project.id}-${row.subgroup?.id ?? 'top'}-${row.milestoneRow?.id ?? 'default'}`}
                   milestones={row.milestones} project={row.project}
-                  rowH={MILESTONE_ROW_H} totalWidth={totalCalWidth}
+                  rowH={msLayout.height} totalWidth={totalCalWidth}
                   calStartDate={calRefDate} ppd={ppd}
                   columns={columns} colWidth={colWidth}
                   isHovered={hoveredKey === `ms-${row.project.id}-${row.subgroup?.id ?? 'top'}-${row.milestoneRow?.id ?? 'default'}`}
@@ -1191,6 +1370,9 @@ export default function GanttChart() {
                   onMilestoneLabelClick={isViewOnly ? undefined : (e, m) => openDetail(m, m.color ?? row.project.color, e)}
                   milestoneRow={row.milestoneRow}
                   dragPreview={calDragPreview}
+                  onItemHover={showItemTip}
+                  onItemLeave={hideItemTip}
+                  tierMap={msLayout.tierOf}
                   today={today}
                 />
               );
@@ -1216,6 +1398,15 @@ export default function GanttChart() {
       borderRadius: 8, padding: '3px 4px',
       boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
     }}>
+      <button
+        onClick={exportPDF}
+        disabled={exporting}
+        title="Export this timeline to a high-quality PDF"
+        style={{ height: 24, padding: '0 8px', borderRadius: 5, fontSize: 11, fontWeight: 700, color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: 4, opacity: exporting ? 0.5 : 1, cursor: exporting ? 'wait' : 'pointer' }}
+      >
+        {exporting ? '… Exporting' : '⬇ PDF'}
+      </button>
+      <div style={{ width: 1, height: 18, background: 'var(--border)', margin: '0 4px' }} />
       <button
         onClick={() => setZoomIdx(i => Math.max(0, i - 1))}
         disabled={zoomIdx === 0}
@@ -1531,6 +1722,9 @@ export default function GanttChart() {
         onSaveName={name => saveDetailName(detailPanel.item.id, name)}
       />
     )}
+
+    {/* Rich hover tooltip — hidden while the detail panel is open to avoid overlap */}
+    {tooltip && !detailPanel && <HoverTooltip tip={tooltip} />}
     </>
   );
 }
@@ -1784,7 +1978,7 @@ function CalendarSwimLaneRow({ totalWidth, rowH, columns, colWidth, project }: {
 
 // ─── Calendar: Task Row ───────────────────────────────────────────────────────
 
-function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, isHalf, preview, subgroupTint, isViewOnly, onHover, onRowClick, onDragStart, onBarClick, today }: {
+function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, isHalf, preview, subgroupTint, isViewOnly, onHover, onRowClick, onDragStart, onBarClick, onItemHover, onItemLeave, today }: {
   task: GanttTask; project: Project; rowH: number; totalWidth: number; calStartDate: Date; ppd: number;
   columns: Date[]; colWidth: number; isHovered: boolean; isHalf: boolean;
   preview?: { startDate: string | null; endDate: string | null };
@@ -1793,10 +1987,12 @@ function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, c
   onRowClick: (e: React.MouseEvent<HTMLDivElement>, task: GanttTask, el: HTMLDivElement) => void;
   onDragStart: (e: React.MouseEvent, kind: 'move-task' | 'resize-left' | 'resize-right') => void;
   onBarClick?: (e: React.MouseEvent) => void;
+  onItemHover: ItemHoverFn; onItemLeave: () => void;
   today: string;
 }) {
   const rowRef     = useRef<HTMLDivElement>(null);
   const isUnplaced = !task.startDate || !task.endDate;
+  const barColor   = task.color ?? project.color;
   return (
     <div
       ref={rowRef}
@@ -1816,7 +2012,8 @@ function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, c
         </div>
       )}
       <div style={{ position: 'absolute', inset: 0, zIndex: 3 }}>
-        <TaskBar task={task} color={task.color ?? project.color} calStart={calStartDate} ppd={ppd} rowH={rowH} preview={preview} onDragStart={onDragStart} onBarClick={onBarClick} />
+        <TaskBar task={task} color={barColor} calStart={calStartDate} ppd={ppd} rowH={rowH} preview={preview} onDragStart={onDragStart} onBarClick={onBarClick}
+          onItemHover={e => onItemHover(task, barColor, e)} onItemLeave={onItemLeave} />
       </div>
     </div>
   );
@@ -1824,14 +2021,17 @@ function CalendarTaskRow({ task, project, rowH, totalWidth, calStartDate, ppd, c
 
 // ─── Calendar: Milestones Row ─────────────────────────────────────────────────
 
-function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, subgroupTint, isViewOnly, onHover, onRowClick, onMilestoneDragStart, onMilestoneLabelClick, milestoneRow, dragPreview, today }: {
+function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, subgroupTint, isViewOnly, onHover, onRowClick, onMilestoneDragStart, onMilestoneLabelClick, milestoneRow, dragPreview, onItemHover, onItemLeave, tierMap, today }: {
   milestones: GanttMilestone[]; project: Project; rowH: number; totalWidth: number; calStartDate: Date; ppd: number;
   columns: Date[]; colWidth: number; isHovered: boolean; subgroupTint?: string; isViewOnly?: boolean; onHover: (key: string | null) => void;
   onRowClick: (e: React.MouseEvent<HTMLDivElement>, milestones: GanttMilestone[], el: HTMLDivElement) => void;
   onMilestoneDragStart: (e: React.MouseEvent, milestone: GanttMilestone) => void;
   onMilestoneLabelClick?: (e: React.MouseEvent, milestone: GanttMilestone) => void;
   milestoneRow?: MilestoneRow;
-  dragPreview: CalDragPreview | null; today: string;
+  dragPreview: CalDragPreview | null;
+  onItemHover: ItemHoverFn; onItemLeave: () => void;
+  tierMap: Record<string, number>;
+  today: string;
 }) {
   const rowRef        = useRef<HTMLDivElement>(null);
   const hoverKey      = `ms-${project.id}`;
@@ -1863,6 +2063,8 @@ function CalendarMilestonesRow({ milestones, project, rowH, totalWidth, calStart
             onDragStart={e => onMilestoneDragStart(e, m)}
             onLabelClick={onMilestoneLabelClick ? e => onMilestoneLabelClick(e, m) : undefined}
             icon={milestoneRow?.icon}
+            onItemHover={e => onItemHover(m, m.color ?? project.color, e)} onItemLeave={onItemLeave}
+            tier={tierMap[m.id] ?? 0} rowHeight={rowH}
           />
         ))}
       </div>
@@ -2348,7 +2550,7 @@ LeftPanelTaskRowGroup.displayName = 'LeftPanelTaskRowGroup';
 // ─── Calendar: Task Row Group ─────────────────────────────────────────────────
 // Renders multiple task bars stacked vertically within a single ROW_H row
 
-function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, subgroupTint, onHover, onBarClick, onRowClick, onDragStart, dragPreview, today }: {
+function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calStartDate, ppd, columns, colWidth, isHovered, subgroupTint, onHover, onBarClick, onRowClick, onDragStart, dragPreview, onItemHover, onItemLeave, today }: {
   tasks: GanttTask[]; taskRow: TaskRow; project: Project;
   rowH: number; totalWidth: number; calStartDate: Date; ppd: number;
   columns: Date[]; colWidth: number; isHovered: boolean;
@@ -2357,6 +2559,7 @@ function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calSt
   onRowClick: (e: React.MouseEvent<HTMLDivElement>, task: GanttTask, el: HTMLDivElement) => void;
   onDragStart: (e: React.MouseEvent, kind: 'move-task' | 'resize-left' | 'resize-right', task: GanttTask) => void;
   dragPreview: CalDragPreview | null;
+  onItemHover: ItemHoverFn; onItemLeave: () => void;
   today: string;
 }) {
   const key    = `tr-${taskRow.id}`;
@@ -2412,6 +2615,7 @@ function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calSt
           const taskPreview = dragPreview?.itemId === t.id
             ? { startDate: dragPreview.startDate, endDate: dragPreview.endDate }
             : undefined;
+          const barColor = t.color ?? taskRow.color ?? project.color;
           return (
             <div key={t.id}
               style={{ opacity: isOverlapping ? 0.65 : 1, transition: 'opacity 0.15s' }}
@@ -2419,13 +2623,14 @@ function CalendarTaskRowGroup({ tasks, taskRow, project, rowH, totalWidth, calSt
             >
               <TaskBar
                 task={t}
-                color={t.color ?? taskRow.color ?? project.color}
+                color={barColor}
                 calStart={calStartDate}
                 ppd={ppd}
                 rowH={rowH}
                 preview={taskPreview}
                 onDragStart={(e, kind) => onDragStart(e, kind, t)}
                 onBarClick={e => { e.stopPropagation(); onBarClick(e, t); }}
+                onItemHover={e => onItemHover(t, barColor, e)} onItemLeave={onItemLeave}
               />
             </div>
           );

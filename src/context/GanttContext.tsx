@@ -463,7 +463,10 @@ export function GanttProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && (e.key === 'z' || e.key === 'Z');
+      // Match on e.code (physical key) so undo also works under non-Latin keyboard
+      // layouts (e.g. Hebrew), where e.key for the Z key is not 'z'/'Z'.
+      const isZ = e.code === 'KeyZ' || e.key === 'z' || e.key === 'Z';
+      const isUndo = (e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey && isZ;
       if (!isUndo) return;
       // Don't hijack undo while the user is editing text in a field.
       const t = e.target as HTMLElement | null;

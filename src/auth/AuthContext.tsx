@@ -29,11 +29,6 @@ function snapshotUser(u: User): User {
 // prompt reappears if the user closed the tab before completing it.
 const ONBOARD_KEY = (uid: string) => `dms-onboard-pending-${uid}`;
 
-// Set right before we navigate away for a Google redirect sign-in. If we come
-// back and this is still set but no session was established, the browser blocked
-// the cross-origin storage that signInWithRedirect relies on.
-const REDIRECT_PENDING_KEY = 'dms-auth-redirect-pending';
-
 /** Turn a Firebase auth error into a short, actionable message for the login page */
 function describeAuthError(err: unknown): string {
   const code = (err as { code?: string })?.code ?? '';
@@ -87,7 +82,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       redirectHandled.current = true;
       getRedirectResult(auth).then(async result => {
         if (result?.user) {
-          sessionStorage.removeItem(REDIRECT_PENDING_KEY);
           await writeUserProfile(result.user);
           // First-ever sign-in for this account → prompt them to set a display
           // name so colleagues can find them when sharing timelines.
@@ -97,23 +91,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           }
           setUser(snapshotUser(result.user));
         }
+        // result === null is normal: the session is restored via
+        // onAuthStateChanged instead. Don't treat that as a failure — doing so
+        // produced a false "sign-in didn't complete" warning on a working redirect.
       }).catch(err => {
+        // Only a real rejection means the redirect actually failed.
         console.error('[Auth] getRedirectResult error:', err);
         setAuthNotice(describeAuthError(err));
-        sessionStorage.removeItem(REDIRECT_PENDING_KEY);
-      }).finally(() => {
-        // We kicked off a redirect but came back with no session and no error →
-        // the browser almost certainly blocked the cross-origin storage that
-        // signInWithRedirect needs (common on localhost where authDomain differs
-        // from the app origin). Tell the user instead of silently bouncing.
-        if (sessionStorage.getItem(REDIRECT_PENDING_KEY) && !auth.currentUser) {
-          sessionStorage.removeItem(REDIRECT_PENDING_KEY);
-          setAuthNotice(
-            "Sign-in didn't complete. Your browser likely blocked the third-party " +
-            'storage that redirect sign-in needs. Try the deployed app, or allow ' +
-            'third-party cookies for this site, then sign in again.',
-          );
-        }
       });
     }
 
@@ -129,8 +113,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const signInWithGoogle = async () => {
     setAuthNotice(null);
-    // Mark that a redirect is in flight so we can detect a silent failure on return.
-    sessionStorage.setItem(REDIRECT_PENDING_KEY, '1');
     await signInWithRedirect(auth, googleProvider);
     // Page navigates away — no code runs after this
   };
