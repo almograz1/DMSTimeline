@@ -191,7 +191,7 @@ function TaskBar({ task, color, calStart, ppd, rowH, preview, onDragStart, onBar
       >
         <div style={{ width: 1.5, height: 10, background: 'rgba(255,255,255,0.5)', borderRadius: 1 }} />
       </div>
-      <span style={{ flex: 1, paddingLeft: HANDLE_W + 4, paddingRight: HANDLE_W + 4, color: '#fff', fontSize: 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: '0 1px 3px rgba(0,0,0,0.4)', pointerEvents: 'none', textAlign: 'center' }}>
+      <span style={{ flex: 1, paddingLeft: HANDLE_W + 4, paddingRight: HANDLE_W + 4, color: '#fff', fontSize: task.fontSize ?? 11, fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', textShadow: '0 1px 3px rgba(0,0,0,0.4)', pointerEvents: 'none', textAlign: 'center' }}>
         {task.name}
       </span>
       <div
@@ -300,6 +300,10 @@ function MilestoneWithLabel({ milestone, color, calStart, ppd, previewDate, onDr
   const nameTop    = diamondTop - 2 - (tier + 1) * MS_NAME_LINE;
   const connectorTop = nameTop + MS_NAME_LINE;
   const connectorH   = Math.max(0, diamondTop - connectorTop);
+  // Label sits on a fixed baseline (its original bottom edge) and grows upward
+  // when a larger font size is set, so it never clips into the diamond.
+  const nameFontSize   = milestone.fontSize ?? 10;
+  const nameBottomOfst = rowHeight - nameTop - MS_NAME_LINE;
 
   return (
     <div
@@ -308,7 +312,7 @@ function MilestoneWithLabel({ milestone, color, calStart, ppd, previewDate, onDr
       onMouseDown={e => { e.stopPropagation(); onItemLeave?.(); onDragStart(e); }}
       onClick={e => { e.stopPropagation(); onLabelClick?.(e); }}
     >
-      <span style={{ position: 'absolute', left: 0, top: nameTop, width: LABEL_W, height: MS_NAME_LINE, fontSize: 10, fontWeight: 700, color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: `${MS_NAME_LINE}px`, textAlign: 'center', textShadow: '0 0 4px #fff, 0 0 4px #fff', pointerEvents: 'none' }}>
+      <span style={{ position: 'absolute', left: 0, bottom: nameBottomOfst, width: LABEL_W, fontSize: nameFontSize, fontWeight: 700, color, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', lineHeight: 1.1, textAlign: 'center', textShadow: '0 0 4px #fff, 0 0 4px #fff', pointerEvents: 'none' }}>
         {milestone.name}
       </span>
       <div style={{ position: 'absolute', left: LABEL_W / 2 - 0.5, top: connectorTop, width: 1, height: connectorH, background: color + '80', pointerEvents: 'none' }} />
@@ -1134,6 +1138,11 @@ export default function GanttChart() {
     if (name.trim()) dispatch({ type: 'UPDATE_ITEM', itemId, patch: { name: name.trim() } });
   }, [dispatch]);
 
+  const saveDetailFontSize = useCallback((itemId: string, fontSize: number | null) => {
+    // null explicitly clears the field (Firestore merge ignores undefined)
+    dispatch({ type: 'UPDATE_ITEM', itemId, patch: { fontSize: fontSize ?? null } });
+  }, [dispatch]);
+
   // ── Click handlers ────────────────────────────────────────────────────────────
 
   const handleTaskRowClick = useCallback((e: React.MouseEvent<HTMLDivElement>, task: GanttTask, rowEl: HTMLDivElement) => {
@@ -1224,6 +1233,7 @@ export default function GanttChart() {
                     }}
                     project={row.project} rowH={ROW_H}
                     onToggle={() => dispatch({ type: 'TOGGLE_COLLAPSE', projectId: row.project.id })}
+                    onRename={isViewOnly ? undefined : name => dispatch({ type: 'UPDATE_PROJECT', projectId: row.project.id, patch: { name } })}
                     onDelete={isViewOnly ? undefined : () => dispatch({ type: 'DELETE_PROJECT', projectId: row.project.id })}
                     onGripMouseDown={isViewOnly ? undefined : e => startRowDrag(e, { kind: 'project', id: row.project.id })}
                     isDragOver={rowDropTarget === key || isTaskDragOnProject}
@@ -1305,6 +1315,7 @@ export default function GanttChart() {
                     rowH={ROW_H}
                     isDragOver={rowDropTarget === key && isTaskDrag}
                     onToggle={() => dispatch({ type: 'TOGGLE_SUBGROUP_COLLAPSE', subgroupId: row.subgroup.id })}
+                    onRename={isViewOnly ? undefined : name => dispatch({ type: 'UPDATE_SUBGROUP', subgroupId: row.subgroup.id, patch: { name } })}
                     onDelete={isViewOnly ? undefined : () => {
                       const sgItems = items.filter(i => i.subgroupId === row.subgroup.id);
                       if (sgItems.length > 0) {
@@ -1580,6 +1591,7 @@ export default function GanttChart() {
       {!isViewOnly && (
         <>
           <button
+            data-tour="tool-link"
             onClick={() => { setLinkMode(m => { if (m) setLinkSource(null); return !m; }); }}
             title="Link mode: click two items to chain them so they move together"
             style={{ height: 24, padding: '0 8px', borderRadius: 5, fontSize: 11, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer',
@@ -1591,6 +1603,7 @@ export default function GanttChart() {
         </>
       )}
       <button
+        data-tour="tool-pdf"
         onClick={exportPDF}
         disabled={exporting}
         title="Export this timeline to a high-quality PDF"
@@ -1599,21 +1612,23 @@ export default function GanttChart() {
         {exporting ? '… Exporting' : '⬇ PDF'}
       </button>
       <div style={{ width: 1, height: 18, background: 'var(--border)', margin: '0 4px' }} />
-      <button
-        onClick={() => setZoomIdx(i => Math.max(0, i - 1))}
-        disabled={zoomIdx === 0}
-        title="Zoom out"
-        style={{ width: 24, height: 24, borderRadius: 5, fontSize: 16, fontWeight: 700, color: 'var(--text-secondary)', opacity: zoomIdx === 0 ? 0.3 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-      >−</button>
-      <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', minWidth: 34, textAlign: 'center' }}>
-        {ZOOM_LABELS[zoomIdx]}
+      <span data-tour="tool-zoom" style={{ display: 'flex', alignItems: 'center' }}>
+        <button
+          onClick={() => setZoomIdx(i => Math.max(0, i - 1))}
+          disabled={zoomIdx === 0}
+          title="Zoom out"
+          style={{ width: 24, height: 24, borderRadius: 5, fontSize: 16, fontWeight: 700, color: 'var(--text-secondary)', opacity: zoomIdx === 0 ? 0.3 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >−</button>
+        <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', minWidth: 34, textAlign: 'center' }}>
+          {ZOOM_LABELS[zoomIdx]}
+        </span>
+        <button
+          onClick={() => setZoomIdx(i => Math.min(ZOOM_LEVELS.length - 1, i + 1))}
+          disabled={zoomIdx === ZOOM_LEVELS.length - 1}
+          title="Zoom in"
+          style={{ width: 24, height: 24, borderRadius: 5, fontSize: 16, fontWeight: 700, color: 'var(--text-secondary)', opacity: zoomIdx === ZOOM_LEVELS.length - 1 ? 0.3 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >＋</button>
       </span>
-      <button
-        onClick={() => setZoomIdx(i => Math.min(ZOOM_LEVELS.length - 1, i + 1))}
-        disabled={zoomIdx === ZOOM_LEVELS.length - 1}
-        title="Zoom in"
-        style={{ width: 24, height: 24, borderRadius: 5, fontSize: 16, fontWeight: 700, color: 'var(--text-secondary)', opacity: zoomIdx === ZOOM_LEVELS.length - 1 ? 0.3 : 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-      >＋</button>
     </div>
 
     {/* Right-click context menu */}
@@ -1912,6 +1927,7 @@ export default function GanttChart() {
         onSave={desc => saveDetail(detailPanel.item.id, desc)}
         onSaveColor={color => saveDetailColor(detailPanel.item.id, color)}
         onSaveName={name => saveDetailName(detailPanel.item.id, name)}
+        onSaveFontSize={fontSize => saveDetailFontSize(detailPanel.item.id, fontSize)}
       />
     )}
 
@@ -1926,7 +1942,8 @@ export default function GanttChart() {
 const LeftPanelHeader = React.forwardRef<HTMLDivElement, {
   project: Project; rowH: number; onToggle: () => void; onDelete?: () => void;
   onGripMouseDown?: (e: React.MouseEvent) => void; isDragOver: boolean;
-}>(({ project, rowH, onToggle, onDelete, onGripMouseDown, isDragOver }, ref) => {
+  onRename?: (name: string) => void;
+}>(({ project, rowH, onToggle, onDelete, onGripMouseDown, isDragOver, onRename }, ref) => {
   const [showDelete, setShowDelete] = useState(false);
   return (
     <div
@@ -1947,10 +1964,19 @@ const LeftPanelHeader = React.forwardRef<HTMLDivElement, {
         onClick={onToggle}
       >▼</span>
       <div style={{ width: 11, height: 11, borderRadius: 4, background: project.color, flexShrink: 0, boxShadow: '0 1px 3px ' + project.color + '66', marginRight: 7 }} />
-      <span
-        style={{ flex: 1, fontWeight: 700, fontSize: 12.5, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', letterSpacing: '-0.01em' }}
-        onClick={onToggle}
-      >{project.name}</span>
+      {onRename ? (
+        <InlineNameEditor
+          name={project.name}
+          onSave={onRename}
+          onClick={onToggle}
+          style={{ fontWeight: 700, fontSize: 12.5, color: 'var(--text-primary)', letterSpacing: '-0.01em' }}
+        />
+      ) : (
+        <span
+          style={{ flex: 1, fontWeight: 700, fontSize: 12.5, color: 'var(--text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer', letterSpacing: '-0.01em' }}
+          onClick={onToggle}
+        >{project.name}</span>
+      )}
       {showDelete && onDelete && (
         <button
           onClick={e => { e.stopPropagation(); onDelete(); }}
@@ -2003,10 +2029,12 @@ LeftPanelTaskRow.displayName = 'LeftPanelTaskRow';
 
 // ─── Inline Name Editor ──────────────────────────────────────────────────────
 
-function InlineNameEditor({ name, onSave, style }: {
+function InlineNameEditor({ name, onSave, style, onClick }: {
   name: string;
   onSave: (name: string) => void;
   style?: React.CSSProperties;
+  /** Fires on a single click of the (non-editing) label — e.g. to toggle collapse */
+  onClick?: (e: React.MouseEvent) => void;
 }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft]     = useState(name);
@@ -2051,7 +2079,8 @@ function InlineNameEditor({ name, onSave, style }: {
     <span
       title="Double-click to rename"
       onDoubleClick={startEdit}
-      style={{ flex: 1, fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'default', ...style }}
+      onClick={onClick}
+      style={{ flex: 1, fontSize: 11, fontWeight: 600, color: 'var(--text-secondary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: onClick ? 'pointer' : 'default', ...style }}
     >
       {name}
     </span>
@@ -2274,7 +2303,17 @@ const ITEM_COLORS = [
   '#3b82f6','#8b5cf6','#ec4899','#6b7280','#1e293b',
 ];
 
-export function DetailPanel({ item, color, projectColor, anchorRect, onClose, onSave, onSaveColor, onSaveName }: {
+// Font-size choices (px) offered in the detail panel. `value` is the label
+// font size in px; null = the context default (11 for tasks, 10 for milestones).
+const ITEM_FONT_SIZES: { label: string; value: number | null }[] = [
+  { label: 'Default', value: null },
+  { label: 'S',  value: 9 },
+  { label: 'M',  value: 12 },
+  { label: 'L',  value: 15 },
+  { label: 'XL', value: 19 },
+];
+
+export function DetailPanel({ item, color, projectColor, anchorRect, onClose, onSave, onSaveColor, onSaveName, onSaveFontSize }: {
   item: GanttTask | GanttMilestone;
   color: string;
   projectColor: string;
@@ -2283,10 +2322,12 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
   onSave: (description: string) => void;
   onSaveColor: (color: string | null) => void;
   onSaveName: (name: string) => void;
+  onSaveFontSize: (fontSize: number | null) => void;
 }) {
-  const [desc, setDesc]               = useState(item.description ?? '');
-  const [name, setName]               = useState(item.name);
-  const [activeColor, setActiveColor] = useState<string | null>(item.color ?? null);
+  const [desc, setDesc]                       = useState(item.description ?? '');
+  const [name, setName]                       = useState(item.name);
+  const [activeColor, setActiveColor]         = useState<string | null>(item.color ?? null);
+  const [activeFontSize, setActiveFontSize]   = useState<number | null>(item.fontSize ?? null);
 
   // Only reset local state when a DIFFERENT item is opened.
   // Never sync from Firestore echoes while the panel is open — the user's
@@ -2297,6 +2338,7 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
       setDesc(item.description ?? "");
       setName(item.name);
       setActiveColor(item.color ?? null);
+      setActiveFontSize(item.fontSize ?? null);
       prevItemId.current = item.id;
     }
   }, [item.id]);
@@ -2350,6 +2392,7 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
         onSave(desc);
         onSaveColor(activeColor);
         onSaveName(name.trim() || item.name);
+        onSaveFontSize(activeFontSize);
         onClose();
       }
     }
@@ -2360,7 +2403,7 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
   // Close on Escape
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') { onSave(desc); onSaveColor(activeColor); onSaveName(name.trim() || item.name); onClose(); }
+      if (e.key === 'Escape') { onSave(desc); onSaveColor(activeColor); onSaveName(name.trim() || item.name); onSaveFontSize(activeFontSize); onClose(); }
     }
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -2413,7 +2456,7 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
           <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: 2 }}>{dateLabel}</div>
         </div>
         <button
-          onClick={() => { onSave(desc); onSaveColor(activeColor); onSaveName(name.trim() || item.name); onClose(); }}
+          onClick={() => { onSave(desc); onSaveColor(activeColor); onSaveName(name.trim() || item.name); onSaveFontSize(activeFontSize); onClose(); }}
           style={{ width: 20, height: 20, borderRadius: 4, background: 'var(--bg-header)', color: 'var(--text-secondary)', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}
         >×</button>
       </div>
@@ -2455,6 +2498,36 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
         </div>
       </div>
 
+      {/* Font size picker */}
+      <div>
+        <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 8 }}>
+          Font size
+        </label>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+          {ITEM_FONT_SIZES.map(f => {
+            const isSelected = f.value === activeFontSize;
+            const accent     = activeColor ?? projectColor;
+            return (
+              <button
+                key={f.label}
+                title={f.value === null ? 'Use default size' : `${f.value}px`}
+                onClick={() => { setActiveFontSize(f.value); onSaveFontSize(f.value); }}
+                style={{
+                  minWidth: 36, padding: '4px 10px', borderRadius: 6,
+                  fontSize: f.value ?? 12, lineHeight: 1,
+                  background: isSelected ? accent : 'var(--bg-app)',
+                  color: isSelected ? '#fff' : 'var(--text-primary)',
+                  border: `1.5px solid ${isSelected ? accent : 'var(--border)'}`,
+                  transition: 'background 0.1s, border-color 0.1s',
+                }}
+              >
+                {f.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Description */}
       <div>
         <label style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-secondary)', textTransform: 'uppercase', letterSpacing: '0.06em', display: 'block', marginBottom: 6 }}>
@@ -2487,7 +2560,7 @@ export function DetailPanel({ item, color, projectColor, anchorRect, onClose, on
 
       {/* Save button */}
       <button
-        onClick={() => { onSave(desc); onSaveColor(activeColor); onSaveName(name.trim() || item.name); onClose(); }}
+        onClick={() => { onSave(desc); onSaveColor(activeColor); onSaveName(name.trim() || item.name); onSaveFontSize(activeFontSize); onClose(); }}
         style={{
           background: activeColor ?? projectColor,
           color: '#fff',
@@ -2535,7 +2608,8 @@ const LeftPanelSubgroupHeader = React.forwardRef<HTMLDivElement, {
   isDragOver?: boolean;
   onToggle: () => void;
   onDelete?: () => void;
-}>(({ subgroup, project, rowH, isDragOver, onToggle, onDelete }, ref) => {
+  onRename?: (name: string) => void;
+}>(({ subgroup, project, rowH, isDragOver, onToggle, onDelete, onRename }, ref) => {
   const [showDelete, setShowDelete] = useState(false);
 
   return (
@@ -2574,15 +2648,23 @@ const LeftPanelSubgroupHeader = React.forwardRef<HTMLDivElement, {
       {/* Subgroup icon */}
       <span style={{ fontSize: 11, color: project.color, flexShrink: 0, marginRight: 6, opacity: 0.85 }}>▤</span>
 
-      {/* Name */}
-      <span style={{
-        flex: 1, fontWeight: 700, fontSize: 11.5,
-        color: project.color,
-        overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-        letterSpacing: '-0.01em',
-      }}>
-        {subgroup.name}
-      </span>
+      {/* Name — double-click to rename */}
+      {onRename ? (
+        <InlineNameEditor
+          name={subgroup.name}
+          onSave={onRename}
+          style={{ fontWeight: 700, fontSize: 11.5, color: project.color, letterSpacing: '-0.01em', cursor: 'pointer' }}
+        />
+      ) : (
+        <span style={{
+          flex: 1, fontWeight: 700, fontSize: 11.5,
+          color: project.color,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+          letterSpacing: '-0.01em',
+        }}>
+          {subgroup.name}
+        </span>
+      )}
 
       {showDelete && onDelete && (
         <button

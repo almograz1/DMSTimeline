@@ -12,6 +12,7 @@ import LoginPage from './auth/LoginPage';
 import ShareModal from './auth/ShareModal';
 import ProfileModal from './auth/ProfileModal';
 import DisplayNameModal from './auth/DisplayNameModal';
+import Guide, { OPEN_GUIDE_EVENT } from './components/Guide';
 import './index.css';
 
 // ─── Timeline Selector + Create ───────────────────────────────────────────────
@@ -32,7 +33,7 @@ function TimelineSelector() {
 
   return (
     <>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+    <div data-tour="timeline" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
       {/* Timeline dropdown */}
       <select
         value={activeTimeline?.id ?? ''}
@@ -207,6 +208,7 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow,
       <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 2px' }} />
 
       {/* Add menu — hidden for view-only users */}
+      <div data-tour="add" style={{ display: 'flex', alignItems: 'center' }}>
       {isViewOnly ? (
         <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 7, background: 'rgba(245,158,11,0.15)', border: '1px solid rgba(245,158,11,0.3)' }}>
           <span style={{ fontSize: 11, color: '#f59e0b', fontWeight: 700 }}>View Only</span>
@@ -219,11 +221,12 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow,
           onAddTask={onAddTask} onAddMilestone={onAddMilestone}
         />
       )}
+      </div>
 
       <div style={{ flex: 1 }} />
 
       {/* Navigation */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+      <div data-tour="nav" style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <TIconBtn onClick={() => pan(-bigStep)}>‹‹</TIconBtn>
         <TIconBtn onClick={() => pan(-smallStep)}>‹</TIconBtn>
         <TIconBtn onClick={() => dispatch({ type: 'GO_TO_TODAY' })} label="Today" />
@@ -234,7 +237,7 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow,
       <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
 
       {/* View toggle */}
-      <div style={{ display: 'flex', background: 'rgba(255,255,255,0.07)', borderRadius: 7, padding: 2, gap: 2 }}>
+      <div data-tour="views" style={{ display: 'flex', background: 'rgba(255,255,255,0.07)', borderRadius: 7, padding: 2, gap: 2 }}>
         {(['daily', 'weekly', 'monthly', 'yearly'] as const).map(mode => (
           <button key={mode} onClick={() => dispatch({ type: 'SET_VIEW_MODE', viewMode: mode })}
             style={{ padding: '4px 10px', borderRadius: 5, fontSize: 11, fontWeight: 600,
@@ -245,6 +248,23 @@ function Toolbar({ onAddProject, onAddSubgroup, onAddMilestoneRow, onAddTaskRow,
           </button>
         ))}
       </div>
+
+      <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
+
+      {/* Help / guided tour */}
+      <button
+        data-tour="help"
+        title="Help & guided tour"
+        onClick={() => window.dispatchEvent(new Event(OPEN_GUIDE_EVENT))}
+        onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.13)'; }}
+        onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'rgba(255,255,255,0.07)'; }}
+        style={{
+          width: 28, height: 28, borderRadius: '50%',
+          background: 'rgba(255,255,255,0.07)', color: 'var(--toolbar-text)',
+          fontSize: 14, fontWeight: 700, border: '1px solid rgba(255,255,255,0.10)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 0.15s',
+        }}
+      >?</button>
 
       <div style={{ width: 1, height: 24, background: 'rgba(255,255,255,0.1)', margin: '0 4px' }} />
       <UserMenu />
@@ -420,6 +440,8 @@ function AppInner() {
       {modal === 'taskRow'      && <AddTaskRowModal     onClose={() => setModal(null)} />}
       {modal === 'task'      && <AddItemModal itemType="task"      onClose={() => setModal(null)} />}
       {modal === 'milestone' && <AddItemModal itemType="milestone" onClose={() => setModal(null)} />}
+
+      <Guide />
     </div>
   );
 }

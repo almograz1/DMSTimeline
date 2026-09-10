@@ -74,12 +74,14 @@ type Action =
   | { type: 'LOAD_SUBGROUPS';          subgroups: Subgroup[] }
   | { type: 'LOAD_ITEMS';              items: GanttItem[] }
   | { type: 'ADD_PROJECT';             project: Project }
+  | { type: 'UPDATE_PROJECT';          projectId: string; patch: Partial<Project> }
   | { type: 'DELETE_PROJECT';          projectId: string }
   | { type: 'TOGGLE_COLLAPSE';         projectId: string }
   | { type: 'REORDER_PROJECTS';        orderedIds: string[] }
   | { type: 'REORDER_ITEMS';           projectId: string; subgroupId?: string | null; orderedIds: string[] }
   | { type: 'REORDER_LANE';            projectId: string; subgroupId: string | null; ordered: { id: string; kind: 'item' | 'taskrow' }[] }
   | { type: 'ADD_SUBGROUP';            subgroup: Subgroup }
+  | { type: 'UPDATE_SUBGROUP';         subgroupId: string; patch: Partial<Subgroup> }
   | { type: 'DELETE_SUBGROUP';         subgroupId: string }
   | { type: 'TOGGLE_SUBGROUP_COLLAPSE'; subgroupId: string }
   | { type: 'ADD_ITEM';                item: GanttItem }
@@ -137,6 +139,11 @@ function reducer(state: GanttState, action: Action): GanttState {
 
     case 'ADD_PROJECT':
       return { ...state, projects: [...state.projects, action.project] };
+    case 'UPDATE_PROJECT':
+      return {
+        ...state,
+        projects: state.projects.map(p => p.id === action.projectId ? { ...p, ...action.patch } : p),
+      };
     case 'DELETE_PROJECT': {
       const removedIds = new Set(state.items.filter(i => i.projectId === action.projectId).map(i => i.id));
       return {
@@ -193,6 +200,11 @@ function reducer(state: GanttState, action: Action): GanttState {
     }
     case 'ADD_SUBGROUP':
       return { ...state, subgroups: [...state.subgroups, action.subgroup] };
+    case 'UPDATE_SUBGROUP':
+      return {
+        ...state,
+        subgroups: state.subgroups.map(s => s.id === action.subgroupId ? { ...s, ...action.patch } : s),
+      };
     case 'DELETE_SUBGROUP': {
       const topItems   = state.items.filter(i => !i.subgroupId);
       const maxOrder   = topItems.length > 0 ? Math.max(...topItems.map(i => i.order ?? 0)) : 0;
@@ -550,6 +562,9 @@ async function syncToFirestore(action: Action, state: GanttState): Promise<void>
     case 'ADD_PROJECT':
       await setDoc(doc(db, PROJECTS_COL, action.project.id), action.project);
       break;
+    case 'UPDATE_PROJECT':
+      await setDoc(doc(db, PROJECTS_COL, action.projectId), action.patch, { merge: true });
+      break;
     case 'DELETE_PROJECT': {
       const batch = writeBatch(db);
       batch.delete(doc(db, PROJECTS_COL, action.projectId));
@@ -595,6 +610,9 @@ async function syncToFirestore(action: Action, state: GanttState): Promise<void>
     }
     case 'ADD_SUBGROUP':
       await setDoc(doc(db, SUBGROUPS_COL, action.subgroup.id), action.subgroup);
+      break;
+    case 'UPDATE_SUBGROUP':
+      await setDoc(doc(db, SUBGROUPS_COL, action.subgroupId), action.patch, { merge: true });
       break;
     case 'DELETE_SUBGROUP': {
       await deleteDoc(doc(db, SUBGROUPS_COL, action.subgroupId));

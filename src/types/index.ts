@@ -57,6 +57,8 @@ export interface GanttTask {
   order: number;
   description?: string;
   color?: string;
+  /** Font size (px) override for this task's label (unset = default) */
+  fontSize?: number;
   /** If set, this task belongs to a named task row (shared calendar line) */
   taskRowId?: string | null;
 }
@@ -75,6 +77,8 @@ export interface GanttMilestone {
   order: number;
   description?: string;
   color?: string;
+  /** Font size (px) override for this milestone's label (unset = default) */
+  fontSize?: number;
 }
 
 export type GanttItem = GanttTask | GanttMilestone;
