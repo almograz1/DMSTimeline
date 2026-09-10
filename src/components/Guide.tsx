@@ -87,7 +87,9 @@ const STEPS: Step[] = [
   {
     title: 'Reopen this guide anytime',
     target: '[data-tour="help"]',
-    body: 'Click the ? button whenever you want to run through this tour again. Happy planning!',
+    body:
+      'Click the ? button whenever you want to run through this tour again. ' +
+      'For any questions or support with anything related to the app, ping Almog Raz on Teams or email. Thank you!',
   },
 ];
 
